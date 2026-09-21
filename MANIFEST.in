@@ -5,6 +5,7 @@ recursive-include couchbase_operational_insights *.py
 exclude couchbase_operational_insights/tests/*.py
 recursive-include acouchbase_operational_insights *.py
 exclude acouchbase_operational_insights/tests/*.py
+prune performer
 global-exclude *.py[cod] *.DS_Store
 exclude .git .gitignore .gitmodules .pre* .flake* MANIFEST.in
 exclude requirements.* requirements-dev.* requirements-sphinx.*

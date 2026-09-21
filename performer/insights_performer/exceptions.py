@@ -1,0 +1,2 @@
+class PerformerException(Exception):
+    pass
