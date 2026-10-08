@@ -3,7 +3,9 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        exclude: ^performer/proto/  # vendored from couchbaselabs/fit-protocol
       - id: end-of-file-fixer
+        exclude: ^performer/proto/  # vendored from couchbaselabs/fit-protocol
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-added-large-files
@@ -27,6 +29,7 @@ repos:
           (?x)^(
               acouchbase_operational_insights/tests/|
               couchbase_operational_insights/tests/|
+              performer/|
               tests/|
               couchbase_operational_insights_version.py
           )

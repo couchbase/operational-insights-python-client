@@ -1,0 +1,5 @@
+# Generated Protocol Buffers code
+insights_performer/protocol/*
+!insights_performer/protocol/__init__.py
+
+.venv/

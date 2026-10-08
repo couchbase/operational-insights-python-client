@@ -1,0 +1,10 @@
+.venv/
+performer/.venv/
+performer/insights_performer/protocol/columnar/
+performer/insights_performer/protocol/shared/
+**/__pycache__/
+*.py[cod]
+build/
+dist/
+wheelhouse/
+docs/_build/
