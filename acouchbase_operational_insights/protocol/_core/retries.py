@@ -20,7 +20,7 @@ from asyncio import CancelledError
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypeVar, Union
 
-from httpx2 import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, ReadTimeout, StreamError
+from httpx2 import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, StreamError, TimeoutException
 
 from acouchbase_operational_insights.protocol._core.anyio_utils import sleep
 from couchbase_operational_insights.common.errors import InternalSDKError, OperationalInsightsError, TimeoutError
@@ -122,9 +122,9 @@ class AsyncRetryHandler:
                         continue
                     await self._request_context.shutdown(type(ex), ex, ex.__traceback__)
                     raise err from None
-                except ReadTimeout as ex:
-                    # we set the read timeout to the query timeout, so if we get a ReadTimeout,
-                    # it means the request timed out from the httpx client
+                except TimeoutException as ex:
+                    # ConnectTimeout is retried above. The other transport timeouts are capped at the time left before
+                    # the request deadline, so any of them (read, write or pool) means the request timed out
                     await self._request_context.shutdown(type(ex), ex, ex.__traceback__)
                     raise TimeoutError(
                         message='Request timed out.', context=str(self._request_context.error_context)

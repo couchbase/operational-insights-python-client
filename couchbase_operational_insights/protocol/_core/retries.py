@@ -21,7 +21,7 @@ from functools import wraps
 from time import sleep
 from typing import TYPE_CHECKING, Callable, Optional, TypeVar, Union
 
-from httpx2 import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, ReadTimeout, StreamError
+from httpx2 import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, StreamError, TimeoutException
 
 from couchbase_operational_insights.common.errors import InternalSDKError, OperationalInsightsError, TimeoutError
 from couchbase_operational_insights.common.logging import LogLevel
@@ -118,9 +118,9 @@ class RetryHandler:
                         continue
                     self._request_context.shutdown(ex)
                     raise err from None
-                except ReadTimeout as ex:
-                    # we set the read timeout to the query timeout, so if we get a ReadTimeout,
-                    # it means the request timed out from the httpx client
+                except TimeoutException as ex:
+                    # ConnectTimeout is retried above. The other transport timeouts are capped at the time left before
+                    # the request deadline, so any of them (read, write or pool) means the request timed out
                     self._request_context.shutdown(ex)
                     raise TimeoutError(
                         message='Request timed out.', context=str(self._request_context.error_context)
