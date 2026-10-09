@@ -17,7 +17,9 @@
 import logging
 import os
 from enum import Enum
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
+
+import ijson
 
 LOG_FORMAT_ARR = [
     '[%(asctime)s.%(msecs)03d]',
@@ -136,7 +138,7 @@ def configure_logging_from_env() -> None:
 
 def log_client_version(logger: logging.Logger, version: str, prefix: str = '') -> None:
     """
-    **INTERNAL** Emit the client version banner, at most once per logger.
+    **INTERNAL** Emit the client version banner, and the JSON parser in use, at most once per logger.
 
     Nothing is emitted, and nothing is recorded as emitted, while the logger has no handler that
     could take the record; an application that configures logging later still gets the banner from
@@ -147,3 +149,18 @@ def log_client_version(logger: logging.Logger, version: str, prefix: str = '') -
     _version_logged.add(logger.name)
     message = f'Python Couchbase Operational Insights Client ({version})'
     log_message(logger, f'{prefix} {message}'.strip(), LogLevel.INFO)
+    message, log_level = _json_parser_message(ijson.__version__, ijson.backend_name)
+    log_message(logger, f'{prefix} {message}'.strip(), log_level)
+
+
+def _json_parser_message(ijson_version: str, backend_name: str) -> Tuple[str, LogLevel]:
+    # ijson falls back to its pure-Python backend when no prebuilt wheel exists for the running
+    # Python (for example, a release newer than ijson's wheels) and yajl was not found at build time.
+    message = f'JSON parser: ijson {ijson_version} ({backend_name} backend)'
+    if backend_name != 'python':
+        return message, LogLevel.INFO
+    return (
+        f'{message}.  Streaming JSON parsing is slower without the C backend; to build it, install the '
+        f'yajl 2 library and reinstall with ijson built from source '
+        f'(pip install --force-reinstall --no-binary ijson couchbase-operational-insights).'
+    ), LogLevel.WARNING

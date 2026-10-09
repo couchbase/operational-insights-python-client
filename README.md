@@ -1,7 +1,9 @@
 # Couchbase Python Operational Insights Client
 Python client for [Couchbase](https://couchbase.com) Operational Insights.
 
-Currently Python 3.10 - Python 3.14 is supported.
+Python 3.10+ is supported.
+
+>Note: The SDK uses [ijson](https://github.com/ICRAR/ijson) to stream query results.  On a Python release newer than the ones ijson publishes wheels for, ijson installs from source and, unless the [yajl](https://lloyd.github.io/yajl/) 2 library is present when it is built, uses its pure-Python parser.  The SDK still works, but parsing large results is slower.  The SDK logs which ijson backend it is using when it creates its HTTP client, as a warning if it is the pure-Python one.  To get the C backend, install yajl 2 (e.g. `libyajl-dev` on Debian/Ubuntu, `yajl` on Homebrew) and reinstall the SDK with ijson built from source: `python3 -m pip install --force-reinstall --no-binary ijson couchbase-operational-insights`.
 
 The Operational Insights SDK supports static typing.  Currently only [mypy](https://github.com/python/mypy) is supported.  You mileage may vary (YMMV) with the use of other static type checkers (e.g. [pyright](https://github.com/microsoft/pyright)).
 

@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, List
 
+import ijson
 import pytest
 
 import couchbase_operational_insights.common.logging as cb_logging
@@ -73,9 +74,11 @@ def pristine_root_logger() -> Iterator[logging.Logger]:
 
 class LoggingTestSuite:
     TEST_MANIFEST = [
+        'test_banner_json_parser_is_info_with_c_backend',
         'test_banner_logged_once_per_logger',
         'test_banner_not_logged_when_handler_stream_closed',
         'test_banner_not_logged_without_handlers',
+        'test_banner_warns_on_pure_python_json_parser',
         'test_configure_is_idempotent',
         'test_env_set_does_not_replace_sdk_logger_handlers',
         'test_env_set_propagates_when_host_configured_logging',
@@ -207,8 +210,39 @@ class LoggingTestSuite:
 
         for name in SDK_LOGGER_NAMES:
             records = handlers[name].records
-            assert len(records) == 1
+            assert len(records) == 2
             assert records[0].getMessage() == '[cluster-id] Python Couchbase Operational Insights Client (pycboi/1.2.3)'
+            parser_message = f'[cluster-id] JSON parser: ijson {ijson.__version__} ({ijson.backend_name} backend)'
+            assert records[1].getMessage().startswith(parser_message)
+
+    def test_banner_warns_on_pure_python_json_parser(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ijson, 'backend_name', 'python')
+        handler = _RecordingHandler()
+        logger = logging.getLogger(SYNC_LOGGER_NAME)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+        log_client_version(logger, 'pycboi/1.2.3')
+
+        assert len(handler.records) == 2
+        record = handler.records[1]
+        assert record.levelno == logging.WARNING
+        assert record.getMessage().startswith(f'JSON parser: ijson {ijson.__version__} (python backend).')
+        assert '--no-binary ijson' in record.getMessage()
+
+    def test_banner_json_parser_is_info_with_c_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ijson, 'backend_name', 'yajl2_c')
+        handler = _RecordingHandler()
+        logger = logging.getLogger(SYNC_LOGGER_NAME)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+        log_client_version(logger, 'pycboi/1.2.3')
+
+        assert len(handler.records) == 2
+        record = handler.records[1]
+        assert record.levelno == logging.INFO
+        assert record.getMessage() == f'JSON parser: ijson {ijson.__version__} (yajl2_c backend)'
 
     def test_banner_not_logged_without_handlers(self) -> None:
         logger = logging.getLogger(SYNC_LOGGER_NAME)
@@ -221,7 +255,7 @@ class LoggingTestSuite:
             handler = _RecordingHandler()
             logger.addHandler(handler)
             log_client_version(logger, 'pycboi/1.2.3')
-            assert len(handler.records) == 1
+            assert len(handler.records) == 2
 
     def test_banner_not_logged_when_handler_stream_closed(self) -> None:
         logger = logging.getLogger(SYNC_LOGGER_NAME)
@@ -238,7 +272,7 @@ class LoggingTestSuite:
             handler = _RecordingHandler()
             logger.handlers = [handler]
             log_client_version(logger, 'pycboi/1.2.3')
-            assert len(handler.records) == 1
+            assert len(handler.records) == 2
 
     def test_import_leaves_root_logger_alone(self) -> None:
         """Importing the SDK in a fresh interpreter must not configure the root logger."""
