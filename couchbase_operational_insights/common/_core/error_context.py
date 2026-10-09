@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
-from httpx import Response as HttpCoreResponse
+from httpx2 import Response as HttpCoreResponse
 
 from couchbase_operational_insights.protocol._core.request import FetchResultsRequest, HttpRequest, QueryRequest
 

@@ -24,7 +24,7 @@ from threading import Event
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, cast
 from uuid import uuid4
 
-from httpx import Response as HttpCoreResponse
+from httpx2 import Response as HttpCoreResponse
 
 from couchbase_operational_insights.common._core import JsonStreamConfig, ParsedResult, ParsedResultType
 from couchbase_operational_insights.common._core.error_context import ErrorContext

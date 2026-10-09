@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Dict, Lis
 from uuid import uuid4
 
 import anyio
-from httpx import Response as HttpCoreResponse
-from httpx import TimeoutException
+from httpx2 import Response as HttpCoreResponse
+from httpx2 import TimeoutException
 
 from acouchbase_operational_insights.protocol._core.anyio_utils import AsyncBackend, current_async_library, get_time
 from acouchbase_operational_insights.protocol._core.async_json_stream import AsyncJsonStream
@@ -396,7 +396,7 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
     def results_or_errors_type(self) -> ParsedResultType:
         return self._json_stream.results_or_errors_type
 
-    def cancel_request(self, fn: Optional[Callable[..., Awaitable[Any]]] = None, *args: object) -> None:
+    def cancel_request(self, fn: Optional[Callable[..., Coroutine[Any, Any, Any]]] = None, *args: object) -> None:
         if fn is not None:
             self._taskgroup.start_soon(fn, *args)
         if self._request_state == RequestState.Timeout:

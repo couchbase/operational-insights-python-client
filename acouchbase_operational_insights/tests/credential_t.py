@@ -24,7 +24,7 @@ from base64 import b64encode
 from typing import Any, Tuple
 
 import pytest
-from httpx import Request
+from httpx2 import Request
 
 from acouchbase_operational_insights.protocol._core.client_adapter import _AsyncClientAdapter
 from couchbase_operational_insights.credential import Credential

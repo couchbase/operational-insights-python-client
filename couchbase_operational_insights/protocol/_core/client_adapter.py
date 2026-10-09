@@ -20,7 +20,7 @@ import logging
 from typing import Optional, cast
 from uuid import uuid4
 
-from httpx import URL, Client, Response
+from httpx2 import URL, Client, Response
 
 from couchbase_operational_insights.common.credential import Credential, _CredentialHolder
 from couchbase_operational_insights.common.deserializer import Deserializer

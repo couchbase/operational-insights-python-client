@@ -20,7 +20,7 @@ from asyncio import CancelledError
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypeVar, Union
 
-from httpx import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, ReadTimeout, StreamError
+from httpx2 import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, ReadTimeout, StreamError
 
 from acouchbase_operational_insights.protocol._core.anyio_utils import sleep
 from couchbase_operational_insights.common.errors import InternalSDKError, OperationalInsightsError, TimeoutError

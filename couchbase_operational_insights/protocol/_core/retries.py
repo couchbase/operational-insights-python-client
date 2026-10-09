@@ -21,7 +21,7 @@ from functools import wraps
 from time import sleep
 from typing import TYPE_CHECKING, Callable, Optional, TypeVar, Union
 
-from httpx import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, ReadTimeout, StreamError
+from httpx2 import ConnectError, ConnectTimeout, CookieConflict, HTTPError, InvalidURL, ReadTimeout, StreamError
 
 from couchbase_operational_insights.common.errors import InternalSDKError, OperationalInsightsError, TimeoutError
 from couchbase_operational_insights.common.logging import LogLevel
