@@ -6,8 +6,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import grpc
-from anyio import create_task_group, open_signal_receiver, run
-from anyio.abc import CancelScope
+from anyio import CancelScope, create_task_group, open_signal_receiver, run
 from insights_performer.protocol.columnar import services_pb2_grpc as services_pb_grpc
 
 

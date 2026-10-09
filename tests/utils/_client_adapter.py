@@ -16,7 +16,7 @@
 
 from typing import Dict, Optional, Union
 
-from httpx import URL, Response
+from httpx2 import URL, Response
 
 from couchbase_operational_insights.protocol._core.client_adapter import _ClientAdapter
 from couchbase_operational_insights.protocol._core.request import (

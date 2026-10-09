@@ -18,15 +18,15 @@ import logging
 import time
 import typing
 
-from httpcore import ConnectionPool, Origin, Request, Response
-from httpcore._backends.base import NetworkStream
-from httpcore._exceptions import ConnectError, ConnectionNotAvailable, ConnectTimeout, PoolTimeout, UnsupportedProtocol
-from httpcore._ssl import default_ssl_context
-from httpcore._sync.connection import RETRIES_BACKOFF_FACTOR, HTTPConnection, exponential_backoff, logger
-from httpcore._sync.connection_pool import PoolByteStream, PoolRequest
-from httpcore._sync.interfaces import ConnectionInterface
-from httpcore._trace import Trace
-from httpx import HTTPTransport, Limits, create_ssl_context
+from httpcore2 import ConnectionPool, Origin, Request, Response
+from httpcore2._backends.base import NetworkStream
+from httpcore2._exceptions import ConnectError, ConnectionNotAvailable, ConnectTimeout, PoolTimeout, UnsupportedProtocol
+from httpcore2._ssl import default_ssl_context
+from httpcore2._sync.connection import RETRIES_BACKOFF_FACTOR, HTTPConnection, exponential_backoff, logger
+from httpcore2._sync.connection_pool import PoolByteStream, PoolRequest
+from httpcore2._sync.interfaces import ConnectionInterface
+from httpcore2._trace import Trace
+from httpx2 import HTTPTransport, Limits, create_ssl_context
 
 from tests import TEST_LOGGER_NAME
 
@@ -112,7 +112,7 @@ class TestConnectionPool(ConnectionPool):
     def create_connection(self, origin: Origin) -> ConnectionInterface:
         if self._proxy is not None:
             if self._proxy.url.scheme in (b'socks5', b'socks5h'):
-                from httpcore._sync.socks_proxy import Socks5Connection
+                from httpcore2._sync.socks_proxy import Socks5Connection
 
                 return Socks5Connection(
                     proxy_origin=self._proxy.url.origin,
@@ -125,7 +125,7 @@ class TestConnectionPool(ConnectionPool):
                     network_backend=self._network_backend,
                 )
             elif origin.scheme == b'http':
-                from httpcore._sync.http_proxy import ForwardHTTPConnection
+                from httpcore2._sync.http_proxy import ForwardHTTPConnection
 
                 return ForwardHTTPConnection(
                     proxy_origin=self._proxy.url.origin,
@@ -135,7 +135,7 @@ class TestConnectionPool(ConnectionPool):
                     keepalive_expiry=self._keepalive_expiry,
                     network_backend=self._network_backend,
                 )
-            from httpcore._sync.http_proxy import TunnelHTTPConnection
+            from httpcore2._sync.http_proxy import TunnelHTTPConnection
 
             return TunnelHTTPConnection(
                 proxy_origin=self._proxy.url.origin,
@@ -251,7 +251,7 @@ def http_transport_init_override(self, *args, **kwargs) -> None:  # type: ignore
     trust_env = kwargs.get('trust_env')
     ssl_context = create_ssl_context(verify=verify, cert=cert, trust_env=trust_env)  # type: ignore
 
-    # See https://github.com/encode/httpx/blob/master/httpx/_config.py for defaults
+    # See https://github.com/pydantic/httpx2/blob/main/src/httpx2/httpx2/_config.py for defaults
     # default keepalive_expiry is 5 seconds
     limits = kwargs.get('limits', Limits(max_connections=100, max_keepalive_connections=20))
     http1 = kwargs.get('http1')

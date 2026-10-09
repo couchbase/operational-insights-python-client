@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from httpx import Response as HttpCoreResponse
+from httpx2 import Response as HttpCoreResponse
 
 from acouchbase_operational_insights.protocol._core.request_context import AsyncRequestContext
 from acouchbase_operational_insights.protocol._core.retries import AsyncRetryHandler

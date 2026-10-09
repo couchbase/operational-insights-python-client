@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from httpx import Response as HttpCoreResponse
+from httpx2 import Response as HttpCoreResponse
 
 from couchbase_operational_insights.common._core.query import build_query_metadata
 from couchbase_operational_insights.common.errors import InternalSDKError, OperationalInsightsError

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, AsyncGenerator, Generator
 
-from httpx import Auth, Request, Response
+from httpx2 import Auth, Request, Response
 
 if TYPE_CHECKING:
     from couchbase_operational_insights.common.credential import _CredentialHolder

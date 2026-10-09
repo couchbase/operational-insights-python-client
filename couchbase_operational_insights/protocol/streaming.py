@@ -19,7 +19,7 @@ from __future__ import annotations
 from concurrent.futures import CancelledError
 from typing import Any, Optional
 
-from httpx import Response as HttpCoreResponse
+from httpx2 import Response as HttpCoreResponse
 
 from couchbase_operational_insights.common._core import ParsedResult, ParsedResultType
 from couchbase_operational_insights.common._core.query import build_query_metadata

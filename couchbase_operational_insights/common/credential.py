@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Literal, Optional
 from couchbase_operational_insights.common._core.utils import validate_path
 
 if TYPE_CHECKING:
-    from httpx import Request
+    from httpx2 import Request
 
 
 logger = logging.getLogger(__name__)
