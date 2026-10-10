@@ -16,19 +16,23 @@
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import Future
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional, Type
 
 import pytest
+from httpx2 import ConnectError, PoolTimeout, ReadTimeout, Response, TimeoutException, WriteTimeout
 
+from couchbase_operational_insights.common.backoff_calculator import DefaultBackoffCalculator
 from couchbase_operational_insights.errors import (
     InvalidCredentialError,
     OperationalInsightsError,
     QueryError,
     TimeoutError,
 )
-from couchbase_operational_insights.options import QueryOptions
+from couchbase_operational_insights.options import QueryOptions, StartQueryOptions
+from couchbase_operational_insights.protocol._core.request import HttpRequest
 from couchbase_operational_insights.result import BlockingQueryResult
 from tests import SyncQueryType, YieldFixture
 from tests.test_server import ErrorType, NonRetriableSpecificationType, ResultType, RetriableGroupType
@@ -44,6 +48,9 @@ class TestServerTestSuite:
         'test_error_non_retriable_response',
         'test_error_retriable_response_timeout',
         'test_error_retriable_response_retries_exceeded',
+        'test_start_query_error_retriable_response_timeout',
+        'test_start_query_retry_limited_to_remaining_deadline',
+        'test_start_query_transport_timeout',
         'test_error_retriable_http503',
         'test_error_timeout',
         'test_results_object_values',
@@ -130,6 +137,84 @@ class TestServerTestSuite:
 
         test_env.assert_error_context_num_attempts(allowed_retries + 1, ex.value._context)
         test_env.assert_error_context_contains_last_dispatch(ex.value._context)
+
+    def test_start_query_error_retriable_response_timeout(
+        self, test_env: BlockingTestEnvironment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The client-side deadline for start_query() is the handle_request_timeout (the timeout option is sent to the
+        # server). Every backoff is well under it, so the request only times out if the deadline set on the first
+        # attempt covers every retry. If each retry reset the deadline, it would exhaust max_retries instead.
+        monkeypatch.setattr(
+            test_env.cluster_or_scope._impl._request_builder,  # type: ignore[union-attr]
+            '_handle_request_timeout',
+            1,
+        )
+        monkeypatch.setattr(DefaultBackoffCalculator, 'calculate_backoff', lambda self, retry_count: 250)
+        test_env.set_url_path('/test_error')
+        test_env.update_request_json(
+            {'error_type': ErrorType.Retriable.value, 'retry_group_type': RetriableGroupType.All.value}
+        )
+        statement = 'SELECT "Hello, data!" AS greeting'
+        with pytest.raises(TimeoutError) as ex:
+            test_env.cluster_or_scope.start_query(statement, StartQueryOptions(max_retries=20))
+
+        test_env.assert_error_context_num_attempts(3, ex.value._context, exact=False)
+        test_env.assert_error_context_contains_last_dispatch(ex.value._context)
+
+    def test_start_query_retry_limited_to_remaining_deadline(
+        self, test_env: BlockingTestEnvironment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The first attempt uses most of the 2s deadline before failing with a retriable error, and the retry then
+        # stalls on the server for 3s. The retry must time out at the deadline, not after another full 2s timeout.
+        monkeypatch.setattr(
+            test_env.cluster_or_scope._impl._request_builder,  # type: ignore[union-attr]
+            '_handle_request_timeout',
+            2,
+        )
+        monkeypatch.setattr(DefaultBackoffCalculator, 'calculate_backoff', lambda self, retry_count: 1)
+        client_adapter = test_env.cluster_or_scope._impl.client_adapter  # type: ignore[union-attr]
+        send_request: Callable[..., Response] = client_adapter.send_request
+        num_sent = 0
+
+        def fail_first_attempt(request: HttpRequest, stream: Optional[bool] = True) -> Response:
+            nonlocal num_sent
+            num_sent += 1
+            if num_sent == 1:
+                time.sleep(1.5)
+                raise ConnectError('Injected first attempt failure')
+            return send_request(request, stream=stream)
+
+        monkeypatch.setattr(client_adapter, 'send_request', fail_first_attempt)
+        test_env.set_url_path('/test_error')
+        test_env.update_request_json({'error_type': ErrorType.Timeout.value, 'timeout': 3})
+        statement = 'SELECT "Hello, data!" AS greeting'
+        start = time.monotonic()
+        with pytest.raises(TimeoutError) as ex:
+            test_env.cluster_or_scope.start_query(statement)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 3
+        test_env.assert_error_context_num_attempts(2, ex.value._context)
+
+    @pytest.mark.parametrize('timeout_error', [PoolTimeout, ReadTimeout, WriteTimeout])
+    def test_start_query_transport_timeout(
+        self,
+        test_env: BlockingTestEnvironment,
+        monkeypatch: pytest.MonkeyPatch,
+        timeout_error: Type[TimeoutException],
+    ) -> None:
+        # Every transport timeout is capped at the time left before the request deadline, so each one is a timeout.
+        client_adapter = test_env.cluster_or_scope._impl.client_adapter  # type: ignore[union-attr]
+
+        def raise_timeout(request: HttpRequest, stream: Optional[bool] = True) -> Response:
+            raise timeout_error('Injected transport timeout')
+
+        monkeypatch.setattr(client_adapter, 'send_request', raise_timeout)
+        statement = 'SELECT "Hello, data!" AS greeting'
+        with pytest.raises(TimeoutError) as ex:
+            test_env.cluster_or_scope.start_query(statement)
+
+        test_env.assert_error_context_num_attempts(1, ex.value._context)
 
     @pytest.mark.parametrize('operational_insights_error', [False, True])
     def test_error_retriable_http503(self, test_env: BlockingTestEnvironment, operational_insights_error: bool) -> None:

@@ -20,7 +20,7 @@ import json
 import math
 from asyncio import CancelledError, Task
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Dict, List, NoReturn, Optional, Type, Union, cast
 from uuid import uuid4
 
 import anyio
@@ -144,8 +144,22 @@ class AsyncRequestContext:
                 message_data={'current_time': f'{current_time}', 'request_deadline': f'{self._request_deadline}'},
             )
             return
-        await self.__aenter__()
+        # A retry after a transport error (e.g. ConnectError) does not shut down the context, so its task group is
+        # still entered; reuse it. Entering another would leave the first cancel scope entered and never exited.
+        if not hasattr(self, '_taskgroup'):
+            await self.__aenter__()
+            # A retriable error in the response shuts the context down before the retry. The retry's new task group
+            # must still be exited, so the context is not shut down again until then.
+            self._shutdown = False
         self._request_state = RequestState.Started
+        if self._request_deadline != math.inf:
+            # A retry of a non-streaming request; the deadline must cover every attempt, so keep the original
+            self.log_message(
+                'Request is a retry, keeping the request deadline',
+                LogLevel.DEBUG,
+                message_data={'current_time': f'{get_time()}', 'request_deadline': f'{self._request_deadline}'},
+            )
+            return
         # we set the request timeout once the context is initialized in order to create the deadline
         # closer to when the upstream logic will begin to use the request context
         timeouts = self._request.get_request_timeouts() or {}
@@ -236,6 +250,24 @@ class AsyncRequestContext:
         self, enable_trace_handling: Optional[bool] = False, ignore_not_found_status: Optional[bool] = False
     ) -> HttpCoreResponse:
         self._error_context.update_num_attempts()
+        # The transport timeouts apply to each phase of the request and name resolution has none, so neither bounds
+        # the attempt as a whole (e.g. a response that trickles in resets the read timeout on every chunk). Cancel
+        # the attempt at the deadline.
+        with anyio.CancelScope(deadline=self._request_deadline) as scope:
+            response = await self._resolve_and_send_request(enable_trace_handling=enable_trace_handling)
+        if scope.cancelled_caught:
+            self._raise_deadline_exceeded('Request has timed out while sending', 'Request timed out.')
+        self._error_context.update_response_context(response)
+        message_data = {
+            'status_code': f'{response.status_code}',
+            'last_dispatched_to': f'{self._error_context.last_dispatched_to}',
+            'last_dispatched_from': f'{self._error_context.last_dispatched_from}',
+            'request_deadline': f'{self._request_deadline}',
+        }
+        self.log_message('HTTP response', LogLevel.DEBUG, message_data=message_data)
+        return response
+
+    async def _resolve_and_send_request(self, enable_trace_handling: Optional[bool] = False) -> HttpCoreResponse:
         ip = await get_request_ip_async(self._request.url.host, self._request.url.port, self.log_message)
         if self._request.path and not self._request.path.isspace():
             req_path = f'{self._request.path}'
@@ -258,16 +290,8 @@ class AsyncRequestContext:
         message_data['streaming'] = str(stream)
 
         self.log_message('HTTP request', LogLevel.DEBUG, message_data=message_data)
-        response = await self._client_adapter.send_request(self._request, stream=stream)
-        self._error_context.update_response_context(response)
-        message_data = {
-            'status_code': f'{response.status_code}',
-            'last_dispatched_to': f'{self._error_context.last_dispatched_to}',
-            'last_dispatched_from': f'{self._error_context.last_dispatched_from}',
-            'request_deadline': f'{self._request_deadline}',
-        }
-        self.log_message('HTTP response', LogLevel.DEBUG, message_data=message_data)
-        return response
+        self._limit_timeouts_to_deadline()
+        return await self._client_adapter.send_request(self._request, stream=stream)
 
     async def shutdown(
         self,
@@ -307,6 +331,26 @@ class AsyncRequestContext:
                 self._request_state = RequestState.AsyncCancelledPriorToTimeout
             else:
                 self._request_state = RequestState.Timeout
+
+    def _limit_timeouts_to_deadline(self) -> None:
+        # The request deadline covers every attempt, so cap each transport timeout at the time left before it.
+        # Otherwise a retry sent just before the deadline could run for another full timeout.
+        current_time = get_time()
+        remaining = self._request_deadline - current_time
+        if remaining <= 0:
+            self._raise_deadline_exceeded(
+                'Request has timed out before sending', 'Request timed out before it was sent.'
+            )
+        timeouts = cast(Dict[str, Optional[float]], self._request.get_request_timeouts() or {})
+        for key in ('pool', 'connect', 'read', 'write'):
+            timeout = timeouts.get(key, None)
+            timeouts[key] = remaining if timeout is None else min(timeout, remaining)
+
+    def _raise_deadline_exceeded(self, log_message: str, error_message: str) -> NoReturn:
+        message_data = {'current_time': f'{get_time()}', 'request_deadline': f'{self._request_deadline}'}
+        self.log_message(log_message, LogLevel.DEBUG, message_data=message_data)
+        self._request_state = RequestState.Timeout
+        raise RuntimeError(error_message)
 
     def _maybe_set_request_error(
         self, exc_type: Optional[Type[BaseException]] = None, exc_val: Optional[BaseException] = None

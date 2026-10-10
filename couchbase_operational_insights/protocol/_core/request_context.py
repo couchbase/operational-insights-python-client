@@ -169,6 +169,14 @@ class RequestContext:
             )
             return
         self._request_state = RequestState.Started
+        if self._request_deadline != math.inf:
+            # A retry of a non-streaming request; the deadline must cover every attempt, so keep the original
+            self.log_message(
+                'Request is a retry, keeping the request deadline',
+                LogLevel.DEBUG,
+                message_data={'request_deadline': f'{self._request_deadline}'},
+            )
+            return
         timeouts = self._request.get_request_timeouts() or {}
         current_time = time.monotonic()
         self._request_deadline = current_time + (timeouts.get('read', None) or DEFAULT_TIMEOUTS['query_timeout'])
@@ -270,6 +278,7 @@ class RequestContext:
         stream = hasattr(self._request, 'should_stream') and self._request.should_stream is True
         message_data['streaming'] = str(stream)
         self.log_message('HTTP request', LogLevel.DEBUG, message_data=message_data)
+        self._limit_timeouts_to_deadline()
         response = self._client_adapter.send_request(self._request, stream=stream)
         self._error_context.update_response_context(response)
         message_data = {
@@ -324,6 +333,21 @@ class RequestContext:
                 self._request_state = RequestState.SyncCancelledPriorToTimeout
             else:
                 self._request_state = RequestState.Timeout
+
+    def _limit_timeouts_to_deadline(self) -> None:
+        # The request deadline covers every attempt, so cap each transport timeout at the time left before it.
+        # Otherwise a retry sent just before the deadline could run for another full timeout.
+        current_time = time.monotonic()
+        remaining = self._request_deadline - current_time
+        if remaining <= 0:
+            message_data = {'current_time': f'{current_time}', 'request_deadline': f'{self._request_deadline}'}
+            self.log_message('Request has timed out before sending', LogLevel.DEBUG, message_data=message_data)
+            self._request_state = RequestState.Timeout
+            raise RuntimeError('Request timed out before it was sent.')
+        timeouts = cast(Dict[str, Optional[float]], self._request.get_request_timeouts() or {})
+        for key in ('pool', 'connect', 'read', 'write'):
+            timeout = timeouts.get(key, None)
+            timeouts[key] = remaining if timeout is None else min(timeout, remaining)
 
     def _process_error(
         self, json_data: Union[str, List[Dict[str, Any]]], handle_context_shutdown: Optional[bool] = False
