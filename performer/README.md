@@ -1,6 +1,6 @@
 # Couchbase Python Operational Insights FIT Performer
 
-This is the FIT performer for the [Couchbase Python Operational Insights Client](https://github.com/couchbaselabs/operational-insights-python-client).
+This is the FIT performer for the [Couchbase Python Operational Insights Client](https://github.com/couchbase/operational-insights-python-client).
 It is versioned alongside the SDK: the performer in this directory is always built against whatever SDK
 source is currently checked out, not a separately pinned version.
 

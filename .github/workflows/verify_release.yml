@@ -22,7 +22,7 @@ on:
           - PYPI
           - TEST_PYPI
       config:
-        description: "JSON formatted object representing various build system input parameters."
+        description: "JSON object deep-merged over the CI config (CBCI_CONFIG_OVERRIDE). Lists replace, not append. Example: {\"support\":{\"python_versions\":[\"3.15\"]}}"
         required: false
         default: ""
         type: string
@@ -44,7 +44,7 @@ on:
         default: "PYPI"
         type: string
       config:
-        description: "JSON formatted object representing various build system input parameters."
+        description: "JSON object deep-merged over the CI config (CBCI_CONFIG_OVERRIDE). Lists replace, not append. Example: {\"support\":{\"python_versions\":[\"3.15\"]}}"
         required: false
         default: ""
         type: string
@@ -58,8 +58,7 @@ env:
   # The support matrix (python versions, platforms per arch) is NOT here any more. It lives
   # in the CI-core's ci-config-pycbac.yaml, which is the only thing that reads it now, and
   # keeping a second copy meant a run could fan out over versions this file did not list.
-  # Override a run from the workflow_dispatch config input, or with the PYTHON_VERSIONS /
-  # PLATFORMS / ARCHES promoted vars.
+  # Override a run with the `config` input (CBCI_CONFIG_OVERRIDE below).
   CBCI_DEFAULT_LINUX_X86_64_PLATFORM: "ubuntu-24.04"
   CBCI_DEFAULT_LINUX_ARM64_PLATFORM: "ubuntu-24.04-arm"
   CBCI_DEFAULT_MACOS_X86_64_PLATFORM: "macos-15-intel"
@@ -67,7 +66,10 @@ env:
   CBCI_DEFAULT_WINDOWS_PLATFORM: "windows-2022"
   CBCI_DEFAULT_LINUX_CONTAINER: "slim-bookworm"
   CBCI_DEFAULT_ALPINE_CONTAINER: "alpine"
-  CBCI_CBDINO_VERSION: "v0.0.80"
+  CBCI_CBDINO_VERSION: "v0.0.128"
+  # The workflow_dispatch / workflow_call `config` input, deep-merged by the CI core over
+  # ci-config-pycbac.yaml. Set once here so every job that loads the config sees it.
+  CBCI_CONFIG_OVERRIDE: ${{ inputs.config }}
   CI_SCRIPTS_URL: "https://raw.githubusercontent.com/couchbaselabs/sdkbuild-jenkinsfiles/master/python/ci_scripts_v2"
 
 jobs:
@@ -95,7 +97,7 @@ jobs:
           ./bootstrap.sh
           ls -alh ci_scripts
       - name: Upload CI scripts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 1
           name: ci_scripts_verify_${{ inputs.packaging_index }}
@@ -109,10 +111,9 @@ jobs:
       CBCI_VERSION: ${{ inputs.version }}
       CBCI_SHA: ${{ inputs.sha }}
       CBCI_PACKAGING_INDEX: ${{ inputs.packaging_index }}
-      CBCI_CONFIG: ${{ inputs.config }}
     steps:
       - name: Download CI scripts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci_scripts_verify_${{ inputs.packaging_index }}
           path: ci_scripts
@@ -134,13 +135,12 @@ jobs:
     needs: [validate-input, default-linux-runner]
     runs-on: ${{ needs.default-linux-runner.outputs.runner }}
     env:
-      CBCI_CONFIG: ${{ inputs.config }}
       CBCI_PACKAGING_INDEX: ${{ inputs.packaging_index }}
     outputs:
       stage_matrices: ${{ steps.build_matrices.outputs.stage_matrices }}
     steps:
       - name: Download CI scripts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci_scripts_verify_${{ inputs.packaging_index }}
           path: ci_scripts
@@ -148,7 +148,7 @@ jobs:
         run: |
           chmod +x ci_scripts/tasks.sh
       - name: Setup Python ${{ env.CBCI_DEFAULT_PYTHON }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.CBCI_DEFAULT_PYTHON }}
       - name: Confirm Python version
@@ -213,15 +213,13 @@ jobs:
   test-setup:
     needs: [confirm-matrices, default-linux-runner]
     runs-on: ${{ needs.default-linux-runner.outputs.runner }}
-    env:
-      CBCI_CONFIG: ${{ inputs.config }}
     steps:
       - name: Checkout (with SHA)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.sha }}
       - name: Download CI scripts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci_scripts_verify_${{ inputs.packaging_index }}
           path: ci_scripts
@@ -229,7 +227,7 @@ jobs:
         run: |
           chmod +x ci_scripts/tasks.sh
       - name: Setup Python ${{ env.CBCI_DEFAULT_PYTHON }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.CBCI_DEFAULT_PYTHON }}
       - name: Confirm Python version
@@ -272,7 +270,7 @@ jobs:
           echo "pycbac_test/tests/test_config.ini contents:"
           cat pycbac_test/tests/test_config.ini
       - name: Upload test setup
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 1
           name: pycboi-test-setup-verify-${{ inputs.packaging_index }}
@@ -288,18 +286,18 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.stage_matrices).test_unit.alpine }}
     steps:
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Confirm Python version
         run: python -c "import sys; print(sys.version)"
       - name: Download test setup
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pycboi-test-setup-verify-${{ inputs.packaging_index }}
           path: pycboi
       - name: Cache Docker image
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/docker_python_image.tar # Path to store the image archive
           key: docker-image-python-${{ matrix.python-version }}-${{ env.CBCI_DEFAULT_ALPINE_CONTAINER }}
@@ -358,13 +356,13 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.stage_matrices).test_unit.linux }}
     steps:
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Confirm Python version
         run: python -c "import sys; print(sys.version)"
       - name: Download test setup
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pycboi-test-setup-verify-${{ inputs.packaging_index }}
           path: pycboi
@@ -407,13 +405,13 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.stage_matrices).test_unit.macos }}
     steps:
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Confirm Python version
         run: python -c "import sys; print(sys.version)"
       - name: Download test setup
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pycboi-test-setup-verify-${{ inputs.packaging_index }}
           path: pycboi
@@ -456,13 +454,13 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.stage_matrices).test_unit.windows }}
     steps:
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Confirm Python version
         run: python -c "import sys; print(sys.version)"
       - name: Download test setup
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pycboi-test-setup-verify-${{ inputs.packaging_index }}
           path: pycboi
@@ -524,13 +522,13 @@ jobs:
         run: |
           cbdinocluster -v init --auto
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Confirm Python version
         run: python -c "import sys; print(sys.version)"
       - name: Download CI scripts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci_scripts_verify_${{ inputs.packaging_index }}
           path: ci_scripts
@@ -540,7 +538,7 @@ jobs:
       - name: Install engine dependency
         run: python -m pip install --quiet pyyaml
       - name: Download test setup
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pycboi-test-setup-verify-${{ inputs.packaging_index }}
           path: pycboi

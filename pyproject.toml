@@ -54,11 +54,11 @@ file = "LICENSE"
 
 [project.urls]
 Homepage = "https://couchbase.com"
-Documentation = "https://docs.couchbase.com/python-analytics-sdk/current/hello-world/overview.html"
+Documentation = "https://docs.couchbase.com/python-operational-insights-sdk/current/hello-world/overview.html"
 "API Reference" = "https://docs.couchbase.com/sdk-api/operational-insights-python-client/"
-Repository = "https://github.com/couchbaselabs/operational-insights-python-client"
+Repository = "https://github.com/couchbase/operational-insights-python-client"
 "Bug Tracker" = "https://issues.couchbase.com/projects/PYCO/issues/"
-"Release Notes" = "https://docs.couchbase.com/python-analytics-sdk/current/project-docs/analytics-sdk-release-notes.html"
+"Release Notes" = "https://docs.couchbase.com/python-operational-insights-sdk/current/project-docs/operational-insights-sdk-release-notes.html"
 
 [dependency-groups]
 dev = [

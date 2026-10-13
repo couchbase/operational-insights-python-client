@@ -22,12 +22,12 @@ The SDK can be installed from source via pip with the following command.
 
 Install the SDK via `pip`:
 ```console
-python3 -m pip install git+https://github.com/couchbaselabs/operational-insights-python-client.git
+python3 -m pip install git+https://github.com/couchbase/operational-insights-python-client.git
 ```
 
 # Using the SDK<a id="using-the-sdk"></a>
 
-Some more examples are provided in the [examples directory](https://github.com/couchbaselabs/operational-insights-python-client/tree/main/examples).
+Some more examples are provided in the [examples directory](https://github.com/couchbase/operational-insights-python-client/tree/main/examples).
 
 **Connecting and executing a query**
 ```python
