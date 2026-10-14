@@ -402,10 +402,9 @@ class AsyncRequestContext:
             await self._taskgroup.__aexit__(exc_type, exc_val, exc_tb)
         except BaseException:
             pass  # we handle the error when the context is shutdown (which is what calls __aexit__())
-        finally:
-            self._maybe_set_request_error(exc_type, exc_val)
-            del self._taskgroup
-            return None  # noqa: B012
+        self._maybe_set_request_error(exc_type, exc_val)
+        del self._taskgroup
+        return None
 
 
 class AsyncStreamingRequestContext(AsyncRequestContext):
