@@ -180,7 +180,7 @@ class QueryOptions(QueryOptionsBase):
         raw (Optional[Dict[str, Any]]): Specifies any additional parameters which should be passed to the Operational Insights engine when executing the query.
         readonly (Optional[bool]): Specifies that this query should be executed in read-only mode, disabling the ability for the query to make any changes to the data.
         scan_consistency (Optional[QueryScanConsistency]): Specifies the consistency requirements when executing the query.
-        timeout (Optional[timedelta]): Set to configure allowed time for operation to complete. Defaults to `None` (75s).
+        timeout (Optional[timedelta]): Set to configure allowed time for operation to complete. Defaults to `None` (the cluster's ``query_timeout``, 10m).
         stream_config (Optional[JsonStreamConfig]): **VOLATILE** Configuration for JSON stream processing. Defaults to `None` (default configuration).  See :class:`~couchbase_operational_insights.common.json_parsing.JsonStreamConfig` for details.
     """  # noqa: E501
 
@@ -202,7 +202,7 @@ class StartQueryOptions(StartQueryOptionsBase):
         raw (Optional[Dict[str, Any]]): Specifies any additional parameters which should be passed to the Operational Insights engine when executing the query.
         readonly (Optional[bool]): Specifies that this query should be executed in read-only mode, disabling the ability for the query to make any changes to the data.
         scan_consistency (Optional[QueryScanConsistency]): Specifies the consistency requirements when executing the query.
-        timeout (Optional[timedelta]): Set to configure allowed time for operation to complete. Defaults to `None` (75s).
+        timeout (Optional[timedelta]): Set to configure allowed time for the query to run on the server. The request that starts the query is bounded by the cluster's ``handle_request_timeout`` instead. Defaults to `None` (the cluster's ``query_timeout``, 10m).
         stream_config (Optional[JsonStreamConfig]): **VOLATILE** Configuration for JSON stream processing. Defaults to `None` (default configuration).  See :class:`~couchbase_operational_insights.common.json_parsing.JsonStreamConfig` for details.
     """  # noqa: E501
 
