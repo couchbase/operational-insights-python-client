@@ -19,10 +19,19 @@ on:
         default: ""
         type: string
       config:
-        description: "JSON formatted object representing various build system input parameters."
+        description: "JSON object deep-merged over the CI config (CBCI_CONFIG_OVERRIDE). Lists replace, not append. Example: {\"support\":{\"python_versions\":[\"3.15\"]}}"
         required: false
         default: ""
         type: string
+      publish_target:
+        description: "Which package index to publish to: both (TestPyPI, then PyPI), pypi, or test_pypi. test_pypi also skips the API docs."
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - pypi
+          - test_pypi
       is_dry_run:
         description: "Set to true in order to do a publish dry-run."
         required: true
@@ -43,8 +52,7 @@ env:
   # The support matrix (python versions, platforms per arch) is NOT here any more. It lives
   # in the CI-core's ci-config-pycbac.yaml, which is the only thing that reads it now, and
   # keeping a second copy meant a run could fan out over versions this file did not list.
-  # Override a run from the workflow_dispatch config input, or with the PYTHON_VERSIONS /
-  # PLATFORMS / ARCHES promoted vars.
+  # Override a run with the `config` input (CBCI_CONFIG_OVERRIDE below).
   CBCI_DEFAULT_LINUX_X86_64_PLATFORM: "ubuntu-24.04"
   CBCI_DEFAULT_LINUX_ARM64_PLATFORM: "ubuntu-24.04-arm"
   CBCI_DEFAULT_MACOS_X86_64_PLATFORM: "macos-15-intel"
@@ -52,7 +60,10 @@ env:
   CBCI_DEFAULT_WINDOWS_PLATFORM: "windows-2022"
   CBCI_DEFAULT_LINUX_CONTAINER: "slim-bookworm"
   CBCI_DEFAULT_ALPINE_CONTAINER: "alpine"
-  CBCI_CBDINO_VERSION: "v0.0.80"
+  CBCI_CBDINO_VERSION: "v0.0.128"
+  # The workflow_dispatch / workflow_call `config` input, deep-merged by the CI core over
+  # ci-config-pycbac.yaml. Set once here so every job that loads the config sees it.
+  CBCI_CONFIG_OVERRIDE: ${{ inputs.config }}
   CI_SCRIPTS_URL: "https://raw.githubusercontent.com/couchbaselabs/sdkbuild-jenkinsfiles/master/python/ci_scripts_v2"
 
 jobs:
@@ -80,7 +91,7 @@ jobs:
           ./bootstrap.sh
           ls -alh ci_scripts
       - name: Upload CI scripts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 1
           name: ci_scripts_publish
@@ -94,10 +105,9 @@ jobs:
       CBCI_IS_RELEASE: true
       CBCI_SHA: ${{ inputs.sha }}
       CBCI_VERSION: ${{ inputs.version }}
-      CBCI_CONFIG: ${{ inputs.config }}
     steps:
       - name: Download CI scripts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci_scripts_publish
           path: ci_scripts
@@ -122,14 +132,14 @@ jobs:
       CBCI_IS_RELEASE: true
       CBCI_SHA: ${{ inputs.sha }}
       CBCI_VERSION: ${{ inputs.version }}
-      CBCI_CONFIG: ${{ inputs.config }}
       CBCI_PUBLISH_DRY_RUN: ${{ inputs.is_dry_run }}
+      CBCI_PUBLISH_TARGET: ${{ inputs.publish_target }}
       CBCI_TESTS_RUN_ID: ${{ inputs.tests_run_id }}
     outputs:
       publish_config: ${{ steps.set_config.outputs.publish_config }}
     steps:
       - name: Download CI scripts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci_scripts_publish
           path: ci_scripts
@@ -137,7 +147,7 @@ jobs:
         run: |
           chmod +x ci_scripts/tasks.sh
       - name: Setup Python ${{ env.CBCI_DEFAULT_PYTHON }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.CBCI_DEFAULT_PYTHON }}
       - name: Confirm Python version
@@ -155,6 +165,16 @@ jobs:
           fi
           publish_config_json=$(jq -cn --argjson pubconfig "$PUBLISH_CONFIG" '$pubconfig')
           echo "PUBLISH_CONFIG_JSON=$publish_config_json"
+          # A CI core that predates CBCI_PUBLISH_TARGET ignores it and returns both indexes.
+          # Refuse that rather than publish to an index the dispatch excluded.
+          if [ "$CBCI_PUBLISH_TARGET" = "test_pypi" ] && [ "$(jq -r '.publish_config.publish_pypi' <<< "$publish_config_json")" != "false" ]; then
+            echo "publish_target=test_pypi but the publish config still enables PyPI; the CI core does not support publish_target."
+            exit 1
+          fi
+          if [ "$CBCI_PUBLISH_TARGET" = "pypi" ] && [ "$(jq -r '.publish_config.publish_test_pypi' <<< "$publish_config_json")" != "false" ]; then
+            echo "publish_target=pypi but the publish config still enables TestPyPI; the CI core does not support publish_target."
+            exit 1
+          fi
           echo "publish_config=$publish_config_json" >> "$GITHUB_OUTPUT"
 
   confirm-publish-config:
@@ -200,17 +220,17 @@ jobs:
     steps:
       - name: Checkout (with SHA)
         if: inputs.sha != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.sha }}
           fetch-depth: 0
       - name: Checkout (no SHA)
         if: inputs.sha == ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Setup Python ${{ env.CBCI_DEFAULT_PYTHON }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.CBCI_DEFAULT_PYTHON }}
       - name: Confirm Python version
@@ -234,7 +254,7 @@ jobs:
           mkdir sphinx
           sphinx-build -M html ./docs ./sphinx
       - name: Upload Python API docs as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 1
           name: pycboi-api-docs
@@ -254,7 +274,7 @@ jobs:
       # This permission is required for pypi's "trusted publisher" feature
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: pycboi-artifact-*
           path: dist
@@ -262,7 +282,7 @@ jobs:
           run-id: ${{ needs.set-tests-run-id.outputs.tests_run_id }}
           github-token: ${{ github.token }}
       - name: Setup Python ${{ env.CBCI_DEFAULT_PYTHON }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.CBCI_DEFAULT_PYTHON }}
       - name: Confirm Python version
@@ -297,13 +317,18 @@ jobs:
       packaging_index: "TEST_PYPI"
       config: ${{ inputs.config && inputs.config || '' }}
 
+  # When TestPyPI is enabled, PyPI waits for it to have published (and validated, unless
+  # skip_validation is set). Accepting a `skipped` validate-test-pypi instead would let a FAILED
+  # TestPyPI upload through, since validate-test-pypi is skipped in that case too.
   publish-pypi:
-    needs: [publish-config, run-tests, set-tests-run-id, validate-test-pypi, default-linux-runner]
+    needs: [publish-config, run-tests, set-tests-run-id, publish-test-pypi, validate-test-pypi, default-linux-runner]
     if: >-
       ${{ !cancelled()
           && fromJson(needs.publish-config.outputs.publish_config).publish_config.publish_pypi
           && (needs.run-tests.result == 'success' || needs.run-tests.result == 'skipped')
-          && (needs.validate-test-pypi.result == 'success' || needs.validate-test-pypi.result == 'skipped') }}
+          && (!fromJson(needs.publish-config.outputs.publish_config).publish_config.publish_test_pypi
+              || (needs.publish-test-pypi.result == 'success'
+                  && (inputs.skip_validation || needs.validate-test-pypi.result == 'success'))) }}
     runs-on: ${{ needs.default-linux-runner.outputs.runner }}
     environment:
       name: publish
@@ -312,7 +337,7 @@ jobs:
       # This permission is required for pypi's "trusted publisher" feature
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: pycboi-artifact-*
           path: dist
@@ -320,7 +345,7 @@ jobs:
           run-id: ${{ needs.set-tests-run-id.outputs.tests_run_id }}
           github-token: ${{ github.token }}
       - name: Setup Python ${{ env.CBCI_DEFAULT_PYTHON }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.CBCI_DEFAULT_PYTHON }}
       - name: Confirm Python version
@@ -353,12 +378,17 @@ jobs:
       packaging_index: "PYPI"
       config: ${{ inputs.config && inputs.config || '' }}
 
+  # The docs are for a version on PyPI, so they publish only after PyPI did (and validated,
+  # unless skip_validation is set). Same reasoning as publish-pypi: a `skipped` validate-pypi
+  # also covers a failed PyPI upload.
   publish-api-docs:
-    needs: [upload-api-docs, validate-pypi, default-linux-runner]
+    needs: [publish-config, upload-api-docs, publish-pypi, validate-pypi, default-linux-runner]
     if: >-
       ${{ !cancelled()
           && fromJson(needs.publish-config.outputs.publish_config).publish_config.publish_api_docs
-          && (needs.validate-pypi.result == 'success' || needs.validate-pypi.result == 'skipped') }}
+          && needs.upload-api-docs.result == 'success'
+          && needs.publish-pypi.result == 'success'
+          && (inputs.skip_validation || needs.validate-pypi.result == 'success') }}
     environment: publish
     permissions:
       id-token: write
@@ -366,12 +396,12 @@ jobs:
     runs-on: ${{ needs.default-linux-runner.outputs.runner }}
     steps:
       - name: Download API docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pycboi-api-docs
       - name: Setup AWS Credentials
         if: ${{ inputs.is_dry_run == false }}
-        uses: aws-actions/configure-aws-credentials@v3
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::786014483886:role/SDK_GHA
           aws-region: us-west-1
