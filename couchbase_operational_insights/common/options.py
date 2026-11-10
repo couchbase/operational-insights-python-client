@@ -74,8 +74,16 @@ class ClusterOptions(ClusterOptionsBase):
 class FetchResultsOptions(FetchResultsOptionsBase):
     """Available options for Operational Insights asynchronous server query fetch results operation.
 
+    .. note::
+        Options marked **VOLATILE** are subject to change at any time.
+
     Args:
         deserializer (Optional[Deserializer]): Specifies a :class:`~couchbase_operational_insights.deserializer.Deserializer` to apply to results.  Defaults to `None` (:class:`~couchbase_operational_insights.deserializer.DefaultJsonDeserializer`).
+        timeout (Optional[timedelta]): **VOLATILE** Set to configure the time allowed for the results response to start
+            (time to first byte).  Iterating the results is not bounded by this timeout, but the time between chunks of
+            the response is.  With the synchronous API, each phase of the HTTP request (e.g. connecting, waiting for
+            the response) is limited separately, so a slow response can raise the ``TimeoutError`` somewhat after this
+            timeout.  Defaults to `None` (the cluster's ``handle_request_timeout``, 10s).
     """  # noqa: E501
 
 

@@ -17,8 +17,9 @@
 from __future__ import annotations
 
 from concurrent.futures import CancelledError
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
+from httpx2 import HTTPError, StreamError, TimeoutException
 from httpx2 import Response as HttpCoreResponse
 
 from couchbase_operational_insights.common._core import ParsedResult, ParsedResultType
@@ -71,6 +72,31 @@ class HttpStreamingResponse:
             self._request_context.shutdown()
             raise StopIteration
 
+    def _raise_if_stream_failed(self) -> None:
+        """
+        **INTERNAL**
+        """
+        try:
+            self._request_context.raise_if_stage_failed()
+            return
+        except TimeoutException as ex:
+            err: Union[OperationalInsightsError, InternalSDKError] = TimeoutError(
+                cause=ex,
+                message='Timed out reading the response stream.',
+                context=str(self._request_context.error_context),
+            )
+        except (HTTPError, StreamError) as ex:
+            err = OperationalInsightsError(
+                cause=ex,
+                message='Error reading the response stream.',
+                context=str(self._request_context.error_context),
+            )
+        except Exception as ex:
+            err = InternalSDKError(cause=ex, message=str(ex), context=str(self._request_context.error_context))
+        self.close()
+        self._request_context.shutdown(err)
+        raise err
+
     def _process_response(
         self, raw_response: Optional[ParsedResult] = None, handle_context_shutdown: Optional[bool] = False
     ) -> None:
@@ -83,18 +109,23 @@ class HttpStreamingResponse:
         """
         **INTERNAL**
         """
-        if hasattr(self, '_core_response'):
-            self._core_response.close()
-            self._request_context.log_message('HTTP core response closed', LogLevel.INFO)
+        # cancel() and the iterating thread can both close, so only one of them takes the response
+        try:
+            core_response = self._core_response
             del self._core_response
+        except AttributeError:
+            return
+        core_response.close()
+        self._request_context.log_message('HTTP core response closed', LogLevel.INFO)
 
     def cancel(self) -> None:
         """
         **INTERNAL**
         """
         self._request_context.log_message('HttpStreamingResponse cancelling request', LogLevel.DEBUG)
-        self.close()
+        # mark the request cancelled first, closing the response can fail a read the iterator is waiting on
         self._request_context.cancel_request()
+        self.close()
         self._request_context.shutdown()
 
     def get_metadata(self) -> QueryMetadata:
@@ -141,6 +172,11 @@ class HttpStreamingResponse:
 
             raw_response = self._request_context.get_result_from_stream()
             if raw_response is None:
+                if self._request_context.cancelled:
+                    self._handle_iteration_abort()
+                self._raise_if_stream_failed()
+                # the parser's stage can finish after the check before the loop, so restart it here or it never resumes
+                self._request_context.maybe_continue_to_process_stream()
                 check_state = True
                 continue
             if raw_response.result_type == ParsedResultType.ROW:
@@ -166,6 +202,7 @@ class HttpStreamingResponse:
 
         self._request_context.initialize()
         self._core_response = self._request_context.send_request()
+        self._request_context.end_time_to_first_byte_deadline()
         if self._request_context.cancelled:
             raise CancelledError('Request was cancelled.')
         self._request_context.start_stream(self._core_response)

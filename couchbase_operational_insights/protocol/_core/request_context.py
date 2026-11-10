@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 import math
 import time
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
 from threading import Event
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, NoReturn, Optional, Union, cast
 from uuid import uuid4
 
 from httpx2 import Response as HttpCoreResponse
@@ -382,6 +382,9 @@ class StreamingRequestContext(RequestContext):
         self._stage_completed_ft: Optional[Future[Any]] = None
         self._stage_notification_ft: Optional[Future[ParsedResultType]] = None
         self._deserializer = request.deserializer
+        self._time_to_first_byte_ended = False
+        # _limit_timeouts_to_deadline() caps the read timeout, keep the configured value for the idle timeout
+        self._idle_timeout = (request.get_request_timeouts() or {}).get('read', None)
 
     @property
     def cancel_enabled(self) -> Optional[bool]:
@@ -415,6 +418,47 @@ class StreamingRequestContext(RequestContext):
             raise RuntimeError('No deserializer found for this request context.')
         return self._deserializer.deserialize(result)
 
+    def end_time_to_first_byte_deadline(self) -> None:
+        """
+        **INTERNAL**
+
+        A fetch results timeout only bounds the time to the first byte. Once the response starts, the HTTP client's read
+        timeout is restored to the configured value and remains as the idle timeout. The deadline is kept, so a retry
+        enforces it again.
+        """
+        if not isinstance(self._request, FetchResultsRequest):
+            return
+        if time.monotonic() >= self._request_deadline:
+            # each transport timeout is capped separately, so their sum can pass the deadline. Keep enforcing it so
+            # a late response still times out
+            return
+        self.log_message(
+            'Response started, ending the time to first byte deadline',
+            LogLevel.DEBUG,
+            message_data={'request_deadline': f'{self._request_deadline}'},
+        )
+        self._time_to_first_byte_ended = True
+        # the HTTP client reads the read timeout again when the body read starts, so this applies to the stream
+        timeouts = cast(Dict[str, Optional[float]], self._request.get_request_timeouts() or {})
+        timeouts['read'] = self._idle_timeout
+
+    @property
+    def has_stage_failed(self) -> bool:
+        """
+        **INTERNAL**
+        """
+        ft = self._stage_completed_ft
+        return ft is not None and ft.done() and not ft.cancelled() and ft.exception() is not None
+
+    def raise_if_stage_failed(self) -> None:
+        """
+        **INTERNAL**
+        """
+        if self._stage_completed_ft is not None and self.has_stage_failed:
+            exc = self._stage_completed_ft.exception()
+            if exc is not None:
+                raise exc
+
     def finish_processing_stream(self) -> None:
         if not self.has_stage_completed:
             self._wait_for_stage_completed()
@@ -426,7 +470,12 @@ class StreamingRequestContext(RequestContext):
             self._json_stream.continue_parsing()
 
     def get_result_from_stream(self) -> Optional[ParsedResult]:
-        return self._json_stream.get_result(self._stream_config.queue_timeout)
+        result = self._json_stream.get_result(self._stream_config.queue_timeout)
+        if result is None and self.has_stage_failed:
+            # the parser can queue rows and then fail after the poll above times out. It queues nothing once its stage
+            # has failed, so polling again delivers those rows before the caller raises the failure.
+            result = self._json_stream.get_result_nowait()
+        return result
 
     def maybe_continue_to_process_stream(self) -> None:
         if not self.has_stage_completed:
@@ -436,6 +485,10 @@ class StreamingRequestContext(RequestContext):
             return
 
         if self.cancelled:
+            return
+
+        if self.has_stage_failed:
+            # the read failed, the caller raises it after the rows already parsed
             return
 
         # NOTE:  _start_next_stage injects the request context into args
@@ -502,18 +555,47 @@ class StreamingRequestContext(RequestContext):
     def wait_for_stage_notification(self) -> None:
         if self._stage_notification_ft is None:
             raise RuntimeError('Stage notification future not created for this context.')
-        deadline = round(self._request_deadline - time.monotonic(), 6)  # round to microseconds
-        if deadline <= 0:
-            raise TimeoutError(
-                message='Request timed out waiting for stage notification', context=str(self._error_context)
-            )
-        result_type = self._stage_notification_ft.result(timeout=deadline)
+        timeout: Optional[float] = None
+        if not self._time_to_first_byte_ended:
+            timeout = round(self._request_deadline - time.monotonic(), 6)  # round to microseconds
+            if timeout <= 0:
+                self._raise_stage_notification_timeout()
+        # a failed read never sends a notification, so wait on the stage too
+        waiting_on: List[Future[Any]] = [self._stage_notification_ft]
+        if self._stage_completed_ft is not None:
+            waiting_on.append(self._stage_completed_ft)
+        wait(waiting_on, timeout=timeout, return_when=FIRST_COMPLETED)
+        if not self._stage_notification_ft.done():
+            self.raise_if_stage_failed()
+            if self.cancelled:
+                raise CancelledError('Request was cancelled.')
+            self._raise_stage_notification_timeout()
+        result_type = self._stage_notification_ft.result()
         if result_type == ParsedResultType.ROW:
             self.log_message('Received row, setting status to streaming', LogLevel.DEBUG)
             # we move to iterating rows
             self._request_state = RequestState.StreamingResults
         else:
             self.log_message(f'Received result type {result_type.name}', LogLevel.DEBUG)
+
+    def _raise_stage_notification_timeout(self) -> NoReturn:
+        err = TimeoutError(message='Request timed out waiting for stage notification', context=str(self._error_context))
+        # the retry handler re-raises SDK errors without cleanup, so shut down here so the response is always closed
+        self.shutdown(err)
+        raise err
+
+    def _check_cancelled_or_timed_out(self) -> None:
+        # set by end_time_to_first_byte_deadline() once a fetch results response starts. Past that point the
+        # request deadline no longer applies, and stalls are caught by the HTTP client's read (idle) timeout, so only
+        # cancellation is checked
+        if self._time_to_first_byte_ended:
+            if self._request_state == RequestState.Cancelled:
+                return
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                self._request_state = RequestState.Cancelled
+                self.log_message('Request has been cancelled', LogLevel.DEBUG)
+            return
+        super()._check_cancelled_or_timed_out()
 
     def _create_stage_notification_future(self) -> None:
         # TODO(PYCO-75):  custom ThreadPoolExecutor, to get a "plain" future
@@ -526,6 +608,7 @@ class StreamingRequestContext(RequestContext):
             del self._json_stream
         self._request_state = RequestState.ResetAndNotStarted
         self._stage_notification_ft = None
+        self._time_to_first_byte_ended = False
         self.log_message('Request state has been reset', LogLevel.DEBUG)
 
     def _start_next_stage(

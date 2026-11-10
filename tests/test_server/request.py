@@ -138,6 +138,7 @@ class ServerStreamedResultsRequest:
         row_delay: Seconds to wait before sending each row.
         stall_after: Number of rows after which the server stops sending, for ``stall`` seconds.
         stall: Seconds to stop sending after ``stall_after`` rows.
+        status: HTTP status code of the response.
     """
 
     row_count: int
@@ -145,6 +146,7 @@ class ServerStreamedResultsRequest:
     row_delay: float = 0.0
     stall_after: Optional[int] = None
     stall: float = 0.0
+    status: int = 200
 
     @classmethod
     def from_json(cls, json_data: Dict[str, Any]) -> ServerStreamedResultsRequest:
@@ -160,4 +162,7 @@ class ServerStreamedResultsRequest:
             if not isinstance(value, (int, float)):
                 raise ValueError(f'Invalid "{key}" value: {value}. Must be a number.')
             delays[key] = float(value)
-        return cls(row_count=row_count, stall_after=stall_after, **delays)
+        status = json_data.get('status', 200)
+        if not isinstance(status, int):
+            raise ValueError(f'Invalid "status" value: {status}. Must be an integer.')
+        return cls(row_count=row_count, stall_after=stall_after, status=status, **delays)

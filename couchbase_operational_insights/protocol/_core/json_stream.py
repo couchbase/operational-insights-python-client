@@ -198,6 +198,12 @@ class JsonStream:
             self._log_message(f'Results queue empty after waiting {timeout} seconds', LogLevel.WARNING)
             return None
 
+    def get_result_nowait(self) -> Optional[ParsedResult]:
+        try:
+            return self._results_queue.get_nowait()
+        except QueueEmpty:
+            return None
+
     def start_parsing(
         self,
         request_context: Optional[StreamingRequestContext] = None,
