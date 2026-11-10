@@ -126,3 +126,38 @@ class ServerHttp503Request:
         return cls(
             error_type=ErrorType.Http503, operational_insights_error=json_data.get('operational_insights_error', False)
         )
+
+
+@dataclass
+class ServerStreamedResultsRequest:
+    """Instructions for the test streamed results route, which streams rows with optional delays.
+
+    Args:
+        row_count: Number of rows to send.
+        header_delay: Seconds to wait before sending the response headers.
+        row_delay: Seconds to wait before sending each row.
+        stall_after: Number of rows after which the server stops sending, for ``stall`` seconds.
+        stall: Seconds to stop sending after ``stall_after`` rows.
+    """
+
+    row_count: int
+    header_delay: float = 0.0
+    row_delay: float = 0.0
+    stall_after: Optional[int] = None
+    stall: float = 0.0
+
+    @classmethod
+    def from_json(cls, json_data: Dict[str, Any]) -> ServerStreamedResultsRequest:
+        row_count = json_data.get('row_count', None)
+        if not isinstance(row_count, int):
+            raise ValueError(f'Invalid "row_count" value: {row_count}. Must be an integer.')
+        stall_after = json_data.get('stall_after', None)
+        if stall_after is not None and not isinstance(stall_after, int):
+            raise ValueError(f'Invalid "stall_after" value: {stall_after}. Must be an integer.')
+        delays = {}
+        for key in ('header_delay', 'row_delay', 'stall'):
+            value = json_data.get(key, 0.0)
+            if not isinstance(value, (int, float)):
+                raise ValueError(f'Invalid "{key}" value: {value}. Must be a number.')
+            delays[key] = float(value)
+        return cls(row_count=row_count, stall_after=stall_after, **delays)

@@ -37,6 +37,7 @@ from tests.test_server.request import (
     ServerErrorRequest,
     ServerHttp503Request,
     ServerResultsRequest,
+    ServerStreamedResultsRequest,
     ServerTimeoutRequest,
 )
 from tests.test_server.response import ServerResponse, ServerResponseError, ServerResponseResults
@@ -58,6 +59,7 @@ class AsyncWebServer:
                 web.post('/test_error', self.handle_error_request),
                 web.post('/test_results', self.handle_results_request),
                 web.post('/test_slow_results', self.handle_slow_results_request),
+                web.post('/test_streamed_results', self.handle_streamed_results_request),
             ]
         )
 
@@ -260,6 +262,43 @@ class AsyncWebServer:
         except Exception as e:
             logger.error(f'An error occurred: {e}', exc_info=True)
             return web.Response(status=400, text='Bad Request')
+
+    async def handle_streamed_results_request(self, request: web.Request) -> web.StreamResponse:
+        """Streams a results response row by row, with optional delays.
+
+        The delays let tests hold back the start of the response, slow the rows down, or stall partway through the
+        stream.  Each row is written as its own chunk, so the client can parse the rows sent before a stall.
+        """
+        try:
+            streamed_req = ServerStreamedResultsRequest.from_json(await request.json())
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f'Invalid streamed results request: {e}')
+            return web.Response(status=400, text='Bad Request')
+
+        if streamed_req.header_delay > 0:
+            await asyncio.sleep(streamed_req.header_delay)
+        response = web.StreamResponse(
+            status=200,
+            headers={'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Cache-Control': 'no-cache'},
+        )
+        await response.prepare(request)
+        resp = ServerResponse.create()
+        start = perf_counter()
+        await response.write(json.dumps({'requestID': resp.request_id})[:-1].encode('utf-8') + b', "results": [')
+        for idx in range(streamed_req.row_count):
+            if streamed_req.stall_after is not None and idx == streamed_req.stall_after and streamed_req.stall > 0:
+                logger.info(f'Stalling the streamed results for {streamed_req.stall}s after {idx} rows')
+                await asyncio.sleep(streamed_req.stall)
+            if streamed_req.row_delay > 0:
+                await asyncio.sleep(streamed_req.row_delay)
+            row = json.dumps({'id': idx + 1, 'name': f'name-{idx + 1}'}).encode('utf-8')
+            await response.write(row if idx == 0 else b',' + row)
+        resp.update_elapsed_time(perf_counter() - start)
+        resp.metrics.result_count = streamed_req.row_count
+        meta = json.dumps({'status': resp.status, 'metrics': resp.metrics.to_json_repr()})
+        await response.write(b'], ' + meta[1:].encode('utf-8'))
+        await response.write_eof()
+        return response
 
     async def handle_slow_results_request(self, request: web.Request) -> web.StreamResponse:
         try:
