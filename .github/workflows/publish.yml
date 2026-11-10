@@ -48,7 +48,7 @@ env:
   # Must match support.default_python in the CI-core's ci-config-pycbac.yaml; gha.py fails
   # the run if they disagree. Kept here because a GHA expression cannot call into Python and
   # the single-node jobs below need it for actions/setup-python.
-  CBCI_DEFAULT_PYTHON: "3.10"
+  CBCI_DEFAULT_PYTHON: "3.11"
   # The support matrix (python versions, platforms per arch) is NOT here any more. It lives
   # in the CI-core's ci-config-pycbac.yaml, which is the only thing that reads it now, and
   # keeping a second copy meant a run could fan out over versions this file did not list.
