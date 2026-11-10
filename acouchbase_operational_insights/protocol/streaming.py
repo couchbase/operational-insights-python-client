@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
+import anyio
+from httpx2 import HTTPError, StreamError, TimeoutException
 from httpx2 import Response as HttpCoreResponse
 
 from acouchbase_operational_insights.protocol._core.request_context import AsyncStreamingRequestContext
@@ -63,6 +65,28 @@ class AsyncHttpStreamingResponse:
             await self._request_context.shutdown()
             raise StopAsyncIteration
 
+    async def _raise_stream_failure(self, ex: Exception) -> None:
+        """
+        **INTERNAL**
+        """
+        err: Union[OperationalInsightsError, InternalSDKError]
+        if isinstance(ex, TimeoutException):
+            err = TimeoutError(
+                cause=ex,
+                message='Timed out reading the response stream.',
+                context=str(self._request_context.error_context),
+            )
+        elif isinstance(ex, (HTTPError, StreamError)):
+            err = OperationalInsightsError(
+                cause=ex,
+                message='Error reading the response stream.',
+                context=str(self._request_context.error_context),
+            )
+        else:
+            err = InternalSDKError(cause=ex, message=str(ex), context=str(self._request_context.error_context))
+        await self.close()
+        await self._request_context.reraise_after_shutdown(err)
+
     async def _process_response(
         self, raw_response: Optional[ParsedResult] = None, handle_context_shutdown: Optional[bool] = False
     ) -> None:
@@ -78,10 +102,14 @@ class AsyncHttpStreamingResponse:
         """
         **INTERNAL**
         """
-        if hasattr(self, '_core_response'):
-            await self._core_response.aclose()
-            self._request_context.log_message('HTTP core response closed', LogLevel.INFO)
-            del self._core_response
+        core_response: Optional[HttpCoreResponse] = getattr(self, '_core_response', None)
+        if core_response is None:
+            return
+        # detach first, cancel() also closes in the background
+        del self._core_response
+        with anyio.CancelScope(shield=True):
+            await core_response.aclose()
+        self._request_context.log_message('HTTP core response closed', LogLevel.INFO)
 
     def cancel(self) -> None:
         """
@@ -141,7 +169,14 @@ class AsyncHttpStreamingResponse:
             await self._handle_iteration_abort()
 
         self._request_context.maybe_continue_to_process_stream()
-        raw_response = await self._request_context.get_result_from_stream()
+        try:
+            raw_response = await self._request_context.get_result_from_stream()
+        except Exception as ex:
+            if self._request_context.cancelled:
+                await self._handle_iteration_abort()
+            if isinstance(ex, OperationalInsightsError):
+                raise
+            await self._raise_stream_failure(ex)
         if raw_response.result_type == ParsedResultType.ROW:
             if raw_response.value is None:
                 await self.close()

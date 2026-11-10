@@ -152,16 +152,9 @@ class JsonStream:
                 self._put(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR))
                 self._handle_notification(ParsedResultType.ERROR)
                 return
-            except ijson.common.JSONError as ex:
+            except ijson.common.JSONError as ex:  # also covers the python backend's UnexpectedSymbol
                 ex_str = str(ex)
                 self._log_message(f'JSON error encountered: {ex_str}', LogLevel.ERROR)
-                self._token_stream_exhausted = True
-                self._put(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR))
-                self._handle_notification(ParsedResultType.ERROR)
-                return
-            except ijson.backends.python.UnexpectedSymbol as ex:
-                ex_str = str(ex)
-                self._log_message(f'Unexpected symbol encountered: {ex_str}', LogLevel.ERROR)
                 self._token_stream_exhausted = True
                 self._put(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR))
                 self._handle_notification(ParsedResultType.ERROR)

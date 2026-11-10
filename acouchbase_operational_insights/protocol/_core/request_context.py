@@ -419,6 +419,7 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
         self._stream_config = stream_config or JsonStreamConfig()
         self._json_stream: AsyncJsonStream
         self._stage_completed: Optional[anyio.Event] = None
+        self._stage_error: Optional[Exception] = None
         self._deserializer = request.deserializer
 
     @property
@@ -452,6 +453,10 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
             raise RuntimeError('No deserializer found for this request context.')
         return self._deserializer.deserialize(result)
 
+    def raise_if_stage_failed(self) -> None:
+        if self._stage_error is not None:
+            raise self._stage_error
+
     async def finish_processing_stream(self) -> None:
         if not self.has_stage_completed:
             await self._wait_for_stage_to_complete()
@@ -461,7 +466,11 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
             await self._wait_for_stage_to_complete()
 
     async def get_result_from_stream(self) -> ParsedResult:
-        return await self._json_stream.get_result()
+        try:
+            return await self._json_stream.get_result()
+        except OperationalInsightsError:
+            self.raise_if_stage_failed()
+            raise
 
     def maybe_continue_to_process_stream(self) -> None:
         if not self.has_stage_completed:
@@ -516,20 +525,46 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
 
     async def wait_for_results_or_errors(self) -> None:
         await self._json_stream.has_results_or_errors.wait()
+        self.raise_if_stage_failed()
         if self._json_stream.results_or_errors_type == ParsedResultType.ROW:
             # we move to iterating rows
             self._request_state = RequestState.StreamingResults
 
     async def _execute(self, fn: Callable[..., Awaitable[Any]], *args: object) -> None:
-        await fn(*args)
-        if self._stage_completed is not None:
-            self._stage_completed.set()
+        try:
+            await fn(*args)
+        except anyio.get_cancelled_exc_class():
+            # cancel_request() cancels the task group. Close the stream so an iterator waiting on a row in another
+            # task wakes up instead of hanging
+            with anyio.CancelScope(shield=True):
+                await self._json_stream.close_on_stream_error()
+            raise
+        except Exception as ex:
+            # raising here would cancel the task group, and with it the caller's iteration
+            self.log_message(f'Error reading the response stream: {ex!r}', LogLevel.DEBUG)
+            self._stage_error = ex
+            await self._json_stream.close_on_stream_error()
+        finally:
+            if self._stage_completed is not None:
+                self._stage_completed.set()
+
+    async def shutdown(
+        self,
+        exc_type: Optional[Type[BaseException]] = None,
+        exc_val: Optional[BaseException] = None,
+        exc_tb: Optional[TracebackType] = None,
+    ) -> None:
+        await super().shutdown(exc_type, exc_val, exc_tb)
+        if hasattr(self, '_json_stream'):
+            self._json_stream.close_parser()
 
     def _reset_stream(self) -> None:
         if hasattr(self, '_json_stream'):
+            self._json_stream.close_parser()
             del self._json_stream
         self._request_state = RequestState.ResetAndNotStarted
         self._stage_completed = None
+        self._stage_error = None
         self._cancel_scope_deadline_updated = False
 
     def _start_next_stage(

@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Type
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional, Type
 
 import anyio
 import pytest
@@ -60,6 +62,8 @@ class TestServerTestSuite:
         'test_error_timeout',
         'test_results_object_values',
         'test_results_raw_values',
+        'test_stream_cancel_while_waiting_for_row',
+        'test_stream_stall_times_out',
     ]
 
     async def test_auth_error_unauthorized(self, test_env: AsyncTestEnvironment) -> None:
@@ -375,6 +379,74 @@ class TestServerTestSuite:
         result = await test_env.cluster_or_scope.execute_query(statement)
         assert isinstance(result, AsyncQueryResult)
         await test_env.assert_rows(result, expected_rows)
+
+    @pytest.mark.parametrize('read_timeout', [None, 1])
+    @pytest.mark.parametrize('stall_after', [0, 3])
+    async def test_stream_stall_times_out(
+        self, test_env: AsyncTestEnvironment, stall_after: int, read_timeout: Optional[float]
+    ) -> None:
+        # The server sends the headers, then stops sending before the first row or after some rows. The HTTP client's
+        # read timeout must raise TimeoutError and keep the rows already sent, without cancelling the application's
+        # task. The read timeout is the query timeout by default, so the request deadline expires at the same moment;
+        # a shorter read timeout isolates the read timeout.
+        test_env.set_url_path('/test_streamed_results')
+        test_env.update_request_json({'row_count': 10, 'stall_after': stall_after, 'stall': 5})
+        # the override is kept on the class scoped client adapter, so reset it for the next test
+        test_env.update_request_extensions({} if read_timeout is None else {'timeout': {'read': read_timeout}})
+        query_timeout = 2 if read_timeout is None else 3
+        statement = 'SELECT "Hello, data!" AS greeting'
+        count = 0
+        start = time.monotonic()
+        try:
+            with pytest.raises(TimeoutError):
+                result = await test_env.cluster_or_scope.execute_query(
+                    statement, QueryOptions(timeout=timedelta(seconds=query_timeout))
+                )
+                async for _ in result.rows():
+                    count += 1
+        finally:
+            test_env.update_request_extensions({})
+        elapsed = time.monotonic() - start
+
+        assert count == stall_after
+        assert elapsed < (read_timeout or query_timeout) + 1
+        if sys.version_info >= (3, 11):
+            task = asyncio.current_task()
+            assert task is not None
+            assert task.cancelling() == 0
+        # the next await must not raise CancelledError
+        await anyio.sleep(0.01)
+
+    async def test_stream_cancel_while_waiting_for_row(self, test_env: AsyncTestEnvironment) -> None:
+        # The server stalls after some rows while the application iterates in another task. Cancelling the result
+        # must end that iteration rather than leave it waiting on a row that never arrives.
+        test_env.set_url_path('/test_streamed_results')
+        test_env.update_request_json({'row_count': 10, 'stall_after': 3, 'stall': 30})
+        statement = 'SELECT "Hello, data!" AS greeting'
+        result = await test_env.cluster_or_scope.execute_query(statement, QueryOptions(timeout=timedelta(seconds=30)))
+        rows: List[Any] = []
+        iteration_done = anyio.Event()
+
+        async def iterate() -> None:
+            try:
+                async for row in result.rows():
+                    rows.append(row)
+            except Exception:  # nosec - the iteration only has to end
+                pass
+            finally:
+                iteration_done.set()
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(iterate)
+            await anyio.sleep(1)
+            assert len(rows) == 3
+            result.cancel()
+            with anyio.move_on_after(4) as scope:
+                await iteration_done.wait()
+            timed_out = scope.cancelled_caught
+            if timed_out:
+                tg.cancel_scope.cancel()
+        assert timed_out is False, 'iteration did not end after cancel()'
 
 
 class ClusterTestServerTests(TestServerTestSuite):

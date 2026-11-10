@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional, Tuple
 
 import ijson
 from anyio import EndOfStream, Event, create_memory_object_stream
@@ -42,7 +42,6 @@ class AsyncJsonStream:
         self._http_stream_iter = http_stream_iter
         self._http_stream_buffer_size = stream_config.http_stream_buffer_size
         self._http_response_buffer = bytearray()
-        self._http_stream_exhausted = False
 
         # logging
         self._log_handler = logger_handler
@@ -51,7 +50,11 @@ class AsyncJsonStream:
         self._send_stream, self._receive_stream = create_memory_object_stream[ParsedResult](
             max_buffer_size=stream_config.buffered_row_max
         )
-        self._json_stream_parser = None
+        self._parsed_events = ijson.sendable_list()
+        self._parsed_event_idx = 0
+        self._json_parser = ijson.parse_coro(self._parsed_events)
+        self._json_parser_closed = False
+        self._parsing_started = False
         self._buffer_entire_result = stream_config.buffer_entire_result
         handler = None if self._buffer_entire_result is True else self._handle_json_result
         self._json_token_parser = AsyncJsonTokenParser(handler)
@@ -126,48 +129,60 @@ class AsyncJsonStream:
         self._results_or_errors_type = result_type
         self._has_results_or_errors_evt.set()
 
+    async def _read_chunk(self) -> bytes:
+        """
+        **INTERNAL**
+        """
+        if not self._http_response_buffer:
+            try:
+                self._http_response_buffer += await self._http_stream_iter.__anext__()
+            except StopAsyncIteration:
+                return b''
+        data = bytes(self._http_response_buffer[: self._http_stream_buffer_size])
+        del self._http_response_buffer[: self._http_stream_buffer_size]
+        return data
+
+    async def _next_event(self) -> Optional[Tuple[str, Any]]:
+        """
+        **INTERNAL**
+
+        Chunks are pushed into ijson rather than letting ``ijson.parse_async`` await the HTTP read: its C backend does
+        not deliver cancellation into the read, so a read timeout escapes as a bare ``CancelledError``.
+        """
+        while self._parsed_event_idx >= len(self._parsed_events):
+            if self._json_parser_closed:
+                return None
+            del self._parsed_events[:]
+            self._parsed_event_idx = 0
+            chunk = await self._read_chunk()
+            if chunk:
+                self._json_parser.send(chunk)
+            else:
+                self._json_parser_closed = True
+                self._json_parser.close()
+        _, event, value = self._parsed_events[self._parsed_event_idx]
+        self._parsed_event_idx += 1
+        return event, value
+
     async def _process_token_stream(self) -> None:
         """
         **INTERNAL**
         """
-        if self._json_stream_parser is None:
-            self._json_stream_parser = ijson.parse_async(self, buf_size=self._http_stream_buffer_size)
-
         while self._continue_processing():
             try:
-                _, event, value = await self._json_stream_parser.__anext__()  # type: ignore[attr-defined]
-                # this is a hack b/c the ijson.parse_async iterator does not yield to the event loop
-                # TODO(PYCO-74):  create PYCO to either build custom JSON parsing, or dig into ijson root cause
-                await self._json_token_parser.parse_token(event, value)
-            except StopAsyncIteration:
-                self._token_stream_exhausted = True
+                next_event = await self._next_event()
+                if next_event is None:
+                    self._token_stream_exhausted = True
+                    break
+                await self._json_token_parser.parse_token(*next_event)
             except JsonTokenParsingError as ex:
-                ex_str = str(ex)
-                self._log_message(f'JSON token parsing error encountered: {ex_str}', LogLevel.ERROR)
-                self._token_stream_exhausted = True
-                await self._send_to_stream(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR), close=True)
-                self._handle_notification(ParsedResultType.ERROR)
+                await self._handle_parsing_error('JSON token parsing error', ex)
                 return
             except ijson.common.IncompleteJSONError as ex:
-                ex_str = str(ex)
-                self._log_message(f'Incomplete JSON error encountered: {ex_str}', LogLevel.ERROR)
-                self._token_stream_exhausted = True
-                await self._send_to_stream(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR), close=True)
-                self._handle_notification(ParsedResultType.ERROR)
+                await self._handle_parsing_error('Incomplete JSON error', ex)
                 return
             except ijson.common.JSONError as ex:
-                ex_str = str(ex)
-                self._log_message(f'JSON error encountered: {ex_str}', LogLevel.ERROR)
-                self._token_stream_exhausted = True
-                await self._send_to_stream(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR), close=True)
-                self._handle_notification(ParsedResultType.ERROR)
-                return
-            except ijson.backends.python.UnexpectedSymbol as ex:
-                ex_str = str(ex)
-                self._log_message(f'Unexpected symbol encountered: {ex_str}', LogLevel.ERROR)
-                self._token_stream_exhausted = True
-                await self._send_to_stream(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR), close=True)
-                self._handle_notification(ParsedResultType.ERROR)
+                await self._handle_parsing_error('JSON error', ex)
                 return
 
         if self._token_stream_exhausted:
@@ -175,31 +190,39 @@ class AsyncJsonStream:
             await self._send_to_stream(ParsedResult(self._json_token_parser.get_result(), result_type), close=True)
             self._handle_notification(result_type)
 
-    async def read(self, size: Optional[int] = -1) -> bytes:
+    async def _handle_parsing_error(self, description: str, ex: Exception) -> None:
         """
         **INTERNAL**
         """
-        if size is None or size == 0 or self._http_stream_exhausted:
-            return b''
+        self.close_parser()
+        ex_str = str(ex)
+        self._log_message(f'{description} encountered: {ex_str}', LogLevel.ERROR)
+        self._token_stream_exhausted = True
+        await self._send_to_stream(ParsedResult(ex_str.encode('utf-8'), ParsedResultType.ERROR), close=True)
+        self._handle_notification(ParsedResultType.ERROR)
 
-        while not self._http_stream_exhausted:
-            if size >= 0 and len(self._http_response_buffer) > size:
-                break
-            try:
-                chunk = await self._http_stream_iter.__anext__()
-                self._http_response_buffer += chunk
-            except StopAsyncIteration:
-                self._http_stream_exhausted = True
-                break
+    async def close_on_stream_error(self) -> None:
+        """
+        **INTERNAL**
+        """
+        self.close_parser()
+        self._token_stream_exhausted = True
+        self._handle_notification(ParsedResultType.ERROR)
+        await self._send_stream.aclose()
 
-        if size == -1:
-            data = bytes(self._http_response_buffer[:])
-            del self._http_response_buffer[:]
-        else:
-            end = min(size, len(self._http_response_buffer))
-            data = bytes(self._http_response_buffer[:end])
-            del self._http_response_buffer[:end]
-        return data
+    def close_parser(self) -> None:
+        """
+        **INTERNAL**
+
+        An unclosed parser on ijson's python backend prints an ignored ``IncompleteJSONError`` when garbage collected.
+        """
+        if self._json_parser_closed:
+            return
+        self._json_parser_closed = True
+        try:
+            self._json_parser.close()
+        except ijson.common.JSONError:
+            pass  # nosec - expected, the stream stopped before the end of the document
 
     async def get_result(self) -> ParsedResult:
         try:
@@ -208,9 +231,10 @@ class AsyncJsonStream:
             raise OperationalInsightsError(ex, 'AsyncJsonStream has been closed.') from None
 
     async def start_parsing(self) -> None:
-        if self._json_stream_parser is not None:
+        if self._parsing_started:
             self._log_message('JSON stream parser already exists', LogLevel.WARNING)
             return
+        self._parsing_started = True
         await self._process_token_stream()
 
     async def continue_parsing(self) -> None:
