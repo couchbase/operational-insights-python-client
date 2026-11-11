@@ -14,7 +14,7 @@
 #  limitations under the License.
 
 import sys
-from typing import Awaitable, overload
+from typing import Awaitable, Optional, overload
 
 if sys.version_info < (3, 11):
     from typing_extensions import Unpack
@@ -35,6 +35,7 @@ from acouchbase_operational_insights.protocol._core.client_adapter import _Async
 from acouchbase_operational_insights.protocol.database import AsyncDatabase
 from acouchbase_operational_insights.protocol.query_handle import AsyncQueryHandle
 from acouchbase_operational_insights.result import AsyncQueryResult
+from couchbase_operational_insights.common._core import JsonStreamConfig
 
 class AsyncCluster:
     @overload
@@ -51,6 +52,9 @@ class AsyncCluster:
     def client_adapter(self) -> _AsyncClientAdapter: ...
     @property
     def connected(self) -> bool: ...
+    def create_query_handle(
+        self, request_id: str, handle: str, stream_config: Optional[JsonStreamConfig] = None
+    ) -> AsyncQueryHandle: ...
     async def set_credential(self, credential: Credential) -> None: ...
     async def shutdown(self) -> None: ...
     def database(self, name: str) -> AsyncDatabase: ...

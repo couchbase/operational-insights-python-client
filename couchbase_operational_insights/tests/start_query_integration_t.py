@@ -35,6 +35,8 @@ class QueryTestSuite:
     TEST_MANIFEST = [
         'test_cancel_prior_iterating',
         'test_cancel_while_iterating',
+        'test_query_handle_serialized',
+        'test_query_handle_serialized_cancel',
         'test_query_metadata',
         'test_query_metadata_not_available',
         'test_query_named_parameters',
@@ -299,6 +301,32 @@ class QueryTestSuite:
         request.addfinalizer(result_handle1.discard_results)
         test_env.assert_rows(result, 2)
         test_env.assert_streaming_response_state(result)
+
+    def test_query_handle_serialized(self, test_env: BlockingTestEnvironment, query_statement_limit5: str) -> None:
+        # continue the query on another Cluster, as another process would
+        q_handle = test_env.cluster_or_scope.start_query(query_statement_limit5)
+        cluster = test_env.create_cluster()
+        try:
+            handle = BlockingQueryHandle.from_serialized(cluster, q_handle.to_serialized())
+            result_handle, result = test_env.wait_for_query_results(handle)
+            assert result is not None
+            test_env.assert_rows(result, 5)
+            result_handle.discard_results()
+        finally:
+            cluster.shutdown()
+
+    def test_query_handle_serialized_cancel(self, test_env: BlockingTestEnvironment) -> None:
+        statement = 'FROM range(0, 100000) AS r SELECT *'
+        q_handle = test_env.cluster_or_scope.start_query(statement)
+        cluster = test_env.create_cluster()
+        try:
+            handle = BlockingQueryHandle.from_serialized(cluster, q_handle.to_serialized())
+            handle.cancel()
+            BlockingTestEnvironment.try_n_times_till_exception(10, 2, handle.fetch_status)
+            with pytest.raises(QueryError):
+                handle.fetch_status()
+        finally:
+            cluster.shutdown()
 
     def test_query_results(self, test_env: BlockingTestEnvironment, query_statement_limit5: str) -> None:
         q_handle = test_env.cluster_or_scope.start_query(query_statement_limit5)

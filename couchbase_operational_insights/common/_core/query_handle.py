@@ -16,11 +16,13 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Awaitable, List, Mapping, Optional, TypedDict, Union
+from typing import Any, Awaitable, List, Mapping, Optional, Tuple, TypedDict, Union
 
 from couchbase_operational_insights.common._core.result import QueryResult
+from couchbase_operational_insights.common.errors import OperationalInsightsError
 
 
 class QueryHandle(ABC):
@@ -109,3 +111,62 @@ class QueryHandleStatusResponse:
             metrics=raw_json.get('metrics', None),
             created_at=raw_json.get('createdAt', None),
         )
+
+
+def get_query_handle_fields(json_response: Optional[Any]) -> Tuple[str, str]:
+    """
+    **INTERNAL**
+
+    Returns the ``requestID`` and ``handle`` from a start query response.
+    """
+    if json_response is None:
+        raise OperationalInsightsError(message='HTTP response does not contain JSON data.')
+
+    request_id = json_response.get('requestID', None)
+    handle = json_response.get('handle', None)
+    required_fields_missing = []
+    if request_id is None:
+        required_fields_missing.append('requestID')
+
+    if handle is None:
+        required_fields_missing.append('handle')
+
+    if len(required_fields_missing) > 0:
+        msg = f'Server response is missing required field(s): {", ".join(required_fields_missing)}.'
+        raise OperationalInsightsError(message=msg)
+
+    return request_id, handle
+
+
+def serialize_query_handle(request_id: str, handle: str) -> str:
+    """
+    **INTERNAL**
+
+    The property names match the start query response and must not change, so that later SDK versions (and other
+    SDKs) can deserialize the handle.
+    """
+    return json.dumps({'requestID': request_id, 'handle': handle})
+
+
+def deserialize_query_handle(serialized: str) -> Tuple[str, str]:
+    """
+    **INTERNAL**
+
+    Returns the ``requestID`` and ``handle`` from a serialized query handle. Other properties are ignored.
+    """
+    try:
+        parsed = json.loads(serialized)
+    except (TypeError, ValueError):
+        raise ValueError('The serialized query handle is not valid JSON.') from None
+
+    if not isinstance(parsed, dict):
+        raise ValueError('The serialized query handle must be a JSON object.')
+
+    request_id = parsed.get('requestID', None)
+    if not isinstance(request_id, str) or not request_id:
+        raise ValueError('The serialized query handle must have a non-empty string requestID.')
+    handle = parsed.get('handle', None)
+    if not isinstance(handle, str) or not handle:
+        raise ValueError('The serialized query handle must have a non-empty string handle.')
+
+    return request_id, handle

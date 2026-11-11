@@ -34,6 +34,7 @@ from acouchbase_operational_insights.protocol._core.request_context import (
 from acouchbase_operational_insights.protocol._core.response import AsyncHttpResponse
 from acouchbase_operational_insights.protocol.query_handle import AsyncQueryHandle
 from acouchbase_operational_insights.protocol.streaming import AsyncHttpStreamingResponse
+from couchbase_operational_insights.common._core.query_handle import get_query_handle_fields
 from couchbase_operational_insights.common.logging import LogLevel
 from couchbase_operational_insights.common.result import AsyncQueryResult
 from couchbase_operational_insights.protocol._core.request import _RequestBuilder
@@ -134,7 +135,18 @@ class AsyncCluster:
             )
             await self._create_client()
         await http_resp.send_request()
-        return AsyncQueryHandle(self._client_adapter, self._request_builder, http_resp, stream_config=stream_config)
+        request_id, handle = get_query_handle_fields(http_resp.json_response)
+        return self.create_query_handle(request_id, handle, stream_config=stream_config)
+
+    def create_query_handle(
+        self, request_id: str, handle: str, stream_config: Optional[JsonStreamConfig] = None
+    ) -> AsyncQueryHandle:
+        """
+        **INTERNAL**
+        """
+        return AsyncQueryHandle(
+            self._client_adapter, self._request_builder, request_id, handle, stream_config=stream_config
+        )
 
     def start_query(self, statement: str, *args: object, **kwargs: object) -> Awaitable[AsyncQueryHandle]:
         req = self._request_builder.build_start_query_request(statement, *args, **kwargs)

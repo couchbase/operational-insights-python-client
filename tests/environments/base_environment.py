@@ -51,7 +51,6 @@ from acouchbase_operational_insights.scope import AsyncScope
 from couchbase_operational_insights.cluster import Cluster
 from couchbase_operational_insights.common.query_handle import AsyncQueryHandle as _CoreAsyncQueryHandle
 from couchbase_operational_insights.common.query_handle import BlockingQueryHandle as _CoreBlockingQueryHandle
-from couchbase_operational_insights.common.request import RequestState
 from couchbase_operational_insights.credential import Credential
 from couchbase_operational_insights.options import ClusterOptions, SecurityOptions
 from couchbase_operational_insights.protocol.query_handle import BlockingQueryHandle, BlockingQueryResultHandle
@@ -78,6 +77,22 @@ class TestEnvironmentOptionsKwargs(TypedDict, total=False):
     collection_name: Optional[str]
     server_handler: Optional[WebServerHandler]
     backend: Optional[str]
+
+
+def get_security_options(config: OperationalInsightsConfig) -> Optional[SecurityOptions]:
+    sec_opts: Optional[SecurityOptions] = None
+    if config.nonprod is True:
+        from couchbase_operational_insights.common._core.certificates import _Certificates
+
+        sec_opts = SecurityOptions.trust_only_certificates(_Certificates.get_nonprod_certificates())
+
+    if config.disable_server_certificate_verification is True:
+        if sec_opts is not None:
+            sec_opts['disable_server_certificate_verification'] = True
+        else:
+            sec_opts = SecurityOptions(disable_server_certificate_verification=True)
+
+    return sec_opts
 
 
 class TestEnvironment:
@@ -186,6 +201,15 @@ class BlockingTestEnvironment(TestEnvironment):
     def assert_streaming_response_state(self, result: BlockingQueryResult) -> None:
         assert hasattr(result._http_response, '_core_response') is False
         assert result._http_response._request_context.is_shutdown is True
+
+    def create_cluster(self) -> Cluster:
+        """Create another Cluster for the configured server, as another process would."""
+        credential = Credential.from_username_and_password(*self.config.get_username_and_pw())
+        connstr = self.config.get_connection_string()
+        sec_opts = get_security_options(self.config)
+        if sec_opts is not None:
+            return Cluster.create_instance(connstr, credential, ClusterOptions(security_options=sec_opts))
+        return Cluster.create_instance(connstr, credential)
 
     def disable_scope(self) -> BlockingTestEnvironment:
         self._scope = None
@@ -344,8 +368,6 @@ class BlockingTestEnvironment(TestEnvironment):
         return_only_result_handle: Optional[bool] = False,
     ) -> Tuple[BlockingQueryResultHandle, Optional[BlockingQueryResult]]:
         assert isinstance(handle, BlockingQueryHandle)
-        expected_state = RequestState.Completed
-        assert handle._http_response._request_context.request_state == expected_state
 
         current_time = time.monotonic()
         deadline = current_time + timeout  # seconds
@@ -389,18 +411,7 @@ class BlockingTestEnvironment(TestEnvironment):
             connstr = config.get_connection_string()
         username, pw = config.get_username_and_pw()
         cred = Credential.from_username_and_password(username, pw)
-        sec_opts: Optional[SecurityOptions] = None
-        if config.nonprod is True:
-            from couchbase_operational_insights.common._core.certificates import _Certificates
-
-            sec_opts = SecurityOptions.trust_only_certificates(_Certificates.get_nonprod_certificates())
-
-        if config.disable_server_certificate_verification is True:
-            if sec_opts is not None:
-                sec_opts['disable_server_certificate_verification'] = True
-            else:
-                sec_opts = SecurityOptions(disable_server_certificate_verification=True)
-
+        sec_opts = get_security_options(config)
         logger.info(f'Creating Cluster with options={env_opts}')
         if sec_opts is not None:
             opts = ClusterOptions(security_options=sec_opts)
@@ -470,6 +481,15 @@ class AsyncTestEnvironment(TestEnvironment):
     def assert_streaming_response_state(self, result: AsyncQueryResult) -> None:
         assert hasattr(result._http_response, '_core_response') is False
         assert result._http_response._request_context.is_shutdown is True
+
+    def create_cluster(self) -> AsyncCluster:
+        """Create another AsyncCluster for the configured server, as another process would."""
+        credential = Credential.from_username_and_password(*self.config.get_username_and_pw())
+        connstr = self.config.get_connection_string()
+        sec_opts = get_security_options(self.config)
+        if sec_opts is not None:
+            return AsyncCluster.create_instance(connstr, credential, ClusterOptions(security_options=sec_opts))
+        return AsyncCluster.create_instance(connstr, credential)
 
     def disable_scope(self) -> AsyncTestEnvironment:
         self._async_scope = None
@@ -614,8 +634,6 @@ class AsyncTestEnvironment(TestEnvironment):
         return_only_result_handle: Optional[bool] = False,
     ) -> Tuple[AsyncQueryResultHandle, Optional[AsyncQueryResult]]:
         assert isinstance(handle, AsyncQueryHandle)
-        expected_state = RequestState.Completed
-        assert handle._http_response._request_context.request_state == expected_state
 
         current_time = get_time()
         deadline = current_time + timeout  # seconds
@@ -683,18 +701,7 @@ class AsyncTestEnvironment(TestEnvironment):
             env_opts['backend'] = backend
         username, pw = config.get_username_and_pw()
         cred = Credential.from_username_and_password(username, pw)
-        sec_opts: Optional[SecurityOptions] = None
-        if config.nonprod is True:
-            from couchbase_operational_insights.common._core.certificates import _Certificates
-
-            sec_opts = SecurityOptions.trust_only_certificates(_Certificates.get_nonprod_certificates())
-
-        if config.disable_server_certificate_verification is True:
-            if sec_opts is not None:
-                sec_opts['disable_server_certificate_verification'] = True
-            else:
-                sec_opts = SecurityOptions(disable_server_certificate_verification=True)
-
+        sec_opts = get_security_options(config)
         logger.info(f'Creating AsyncCluster with options={env_opts}')
         if sec_opts is not None:
             opts = ClusterOptions(security_options=sec_opts)

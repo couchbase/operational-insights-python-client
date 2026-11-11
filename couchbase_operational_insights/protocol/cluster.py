@@ -22,6 +22,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional, Union
 from uuid import uuid4
 
+from couchbase_operational_insights.common._core.query_handle import get_query_handle_fields
 from couchbase_operational_insights.common.logging import LogLevel
 from couchbase_operational_insights.common.result import BlockingQueryResult
 from couchbase_operational_insights.protocol._core.client_adapter import _ClientAdapter
@@ -32,6 +33,7 @@ from couchbase_operational_insights.protocol.query_handle import BlockingQueryHa
 from couchbase_operational_insights.protocol.streaming import HttpStreamingResponse
 
 if TYPE_CHECKING:
+    from couchbase_operational_insights.common._core import JsonStreamConfig
     from couchbase_operational_insights.common.credential import Credential
     from couchbase_operational_insights.options import ClusterOptions
 
@@ -161,8 +163,22 @@ class Cluster:
         request_context = RequestContext(self.client_adapter, base_req)
         resp = HttpResponse(request_context)
         resp.send_request()
+        request_id, handle = get_query_handle_fields(resp.json_response)
+        return self.create_query_handle(request_id, handle, stream_config=stream_config)
+
+    def create_query_handle(
+        self, request_id: str, handle: str, stream_config: Optional[JsonStreamConfig] = None
+    ) -> BlockingQueryHandle:
+        """
+        **INTERNAL**
+        """
         return BlockingQueryHandle(
-            self._client_adapter, self._request_builder, resp, self._tp_executor, stream_config=stream_config
+            self._client_adapter,
+            self._request_builder,
+            request_id,
+            handle,
+            self._tp_executor,
+            stream_config=stream_config,
         )
 
     @classmethod
