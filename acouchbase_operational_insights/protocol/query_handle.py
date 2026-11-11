@@ -25,8 +25,12 @@ from acouchbase_operational_insights.protocol._core.request_context import (
 )
 from acouchbase_operational_insights.protocol._core.response import AsyncHttpResponse
 from acouchbase_operational_insights.protocol.streaming import AsyncHttpStreamingResponse
-from couchbase_operational_insights.common._core.query_handle import QueryHandleStatusResponse
+from couchbase_operational_insights.common._core.query_handle import (
+    QueryHandleStatusResponse,
+    serialize_query_handle,
+)
 from couchbase_operational_insights.common.errors import OperationalInsightsError
+from couchbase_operational_insights.common.logging import LogLevel
 from couchbase_operational_insights.common.query_handle import AsyncQueryHandle as _CoreAsyncQueryHandle
 from couchbase_operational_insights.common.query_handle import AsyncQueryResultHandle as _CoreAsyncQueryResultHandle
 from couchbase_operational_insights.common.query_handle import AsyncQueryStatus as _CoreAsyncQueryStatus
@@ -43,19 +47,19 @@ class AsyncQueryHandle(_CoreAsyncQueryHandle):
         self,
         client_adapter: _AsyncClientAdapter,
         request_builder: _RequestBuilder,
-        http_response: AsyncHttpResponse,
+        request_id: str,
+        handle: str,
         stream_config: Optional[JsonStreamConfig] = None,
     ) -> None:
         super().__init__()
         self._client_adapter = client_adapter
         self._request_builder = request_builder
-        self._http_response = http_response
         self._stream_config = stream_config
-        self._request_id: str = ''
-        self._handle: str = ''
-        self._get_status_handle()
+        self._request_id = request_id
+        self._handle = handle
 
     async def fetch_status(self, options: Optional[Any] = None, **kwargs: Any) -> AsyncQueryStatus:
+        await self._create_client_if_needed()
         server_req = self._request_builder.build_request_from_handle(self._handle)
         request_context = AsyncRequestContext(self._client_adapter, server_req)
         resp = AsyncHttpResponse(request_context)
@@ -72,30 +76,26 @@ class AsyncQueryHandle(_CoreAsyncQueryHandle):
         )
 
     async def cancel(self, options: Optional[Any] = None, **kwargs: Any) -> None:
+        await self._create_client_if_needed()
         cancel_req = self._request_builder.build_cancel_request(self._request_id)
         request_context = AsyncRequestContext(self._client_adapter, cancel_req)
         resp = AsyncHttpResponse(request_context, has_no_body_response=True, request_id=self._request_id)
         await resp.send_request()
 
-    def _get_status_handle(self) -> None:
-        if self._http_response.json_response is None:
-            raise OperationalInsightsError(message='HTTP response does not contain JSON data.')
+    def to_serialized(self) -> str:
+        return serialize_query_handle(self._request_id, self._handle)
 
-        request_id = self._http_response.json_response.get('requestID', None)
-        handle = self._http_response.json_response.get('handle', None)
-        required_fields_missing = []
-        if request_id is None:
-            required_fields_missing.append('requestID')
+    async def _create_client_if_needed(self) -> None:
+        """
+        **INTERNAL**
 
-        if handle is None:
-            required_fields_missing.append('handle')
-
-        if len(required_fields_missing) > 0:
-            msg = f'Server response is missing required field(s): {", ".join(required_fields_missing)}.'
-            raise OperationalInsightsError(message=msg)
-
-        self._request_id = request_id
-        self._handle = handle
+        The cluster creates its client on the first query, so a deserialized handle can be used before it exists.
+        """
+        if not self._client_adapter.has_client:
+            self._client_adapter.log_message(
+                'Cluster does not have a connection.  Creating the client.', LogLevel.WARNING
+            )
+            await self._client_adapter.create_client()
 
     def _get_handle_status_response(self, resp: AsyncHttpResponse) -> QueryHandleStatusResponse:
         if resp.json_response is None:

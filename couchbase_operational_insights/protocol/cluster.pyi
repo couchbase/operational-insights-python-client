@@ -15,7 +15,7 @@
 
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import overload
+from typing import Optional, overload
 
 if sys.version_info < (3, 11):
     from typing_extensions import Unpack
@@ -23,6 +23,7 @@ else:
     from typing import Unpack
 
 from couchbase_operational_insights import JSONType
+from couchbase_operational_insights.common._core import JsonStreamConfig
 from couchbase_operational_insights.common.credential import Credential
 from couchbase_operational_insights.common.result import BlockingQueryResult
 from couchbase_operational_insights.options import (
@@ -57,6 +58,9 @@ class Cluster:
     def connected(self) -> bool: ...
     @property
     def threadpool_executor(self) -> ThreadPoolExecutor: ...
+    def create_query_handle(
+        self, request_id: str, handle: str, stream_config: Optional[JsonStreamConfig] = None
+    ) -> BlockingQueryHandle: ...
     @overload
     def execute_query(self, statement: str) -> BlockingQueryResult: ...
     @overload

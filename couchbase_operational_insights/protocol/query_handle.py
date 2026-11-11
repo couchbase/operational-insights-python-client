@@ -19,7 +19,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Optional
 
-from couchbase_operational_insights.common._core.query_handle import QueryHandleStatusResponse
+from couchbase_operational_insights.common._core.query_handle import (
+    QueryHandleStatusResponse,
+    serialize_query_handle,
+)
 from couchbase_operational_insights.common.errors import OperationalInsightsError
 from couchbase_operational_insights.common.query_handle import BlockingQueryHandle as _CoreBlockingQueryHandle
 from couchbase_operational_insights.common.query_handle import (
@@ -43,19 +46,18 @@ class BlockingQueryHandle(_CoreBlockingQueryHandle):
         self,
         client_adapter: _ClientAdapter,
         request_builder: _RequestBuilder,
-        http_response: HttpResponse,
+        request_id: str,
+        handle: str,
         tp_executor: ThreadPoolExecutor,
         stream_config: Optional[JsonStreamConfig] = None,
     ) -> None:
         super().__init__()
         self._client_adapter = client_adapter
         self._request_builder = request_builder
-        self._http_response = http_response
         self._tp_executor = tp_executor
         self._stream_config = stream_config
-        self._request_id: str = ''
-        self._handle: str = ''
-        self._get_status_handle()
+        self._request_id = request_id
+        self._handle = handle
 
     def fetch_status(self, options: Optional[Any] = None, **kwargs: Any) -> BlockingQueryStatus:
         server_req = self._request_builder.build_request_from_handle(self._handle)
@@ -80,25 +82,8 @@ class BlockingQueryHandle(_CoreBlockingQueryHandle):
         resp = HttpResponse(request_context, has_no_body_response=True, request_id=self._request_id)
         resp.send_request()
 
-    def _get_status_handle(self) -> None:
-        if self._http_response.json_response is None:
-            raise OperationalInsightsError(message='HTTP response does not contain JSON data.')
-
-        request_id = self._http_response.json_response.get('requestID', None)
-        handle = self._http_response.json_response.get('handle', None)
-        required_fields_missing = []
-        if request_id is None:
-            required_fields_missing.append('requestID')
-
-        if handle is None:
-            required_fields_missing.append('handle')
-
-        if len(required_fields_missing) > 0:
-            msg = f'Server response is missing required field(s): {", ".join(required_fields_missing)}.'
-            raise OperationalInsightsError(message=msg)
-
-        self._request_id = request_id
-        self._handle = handle
+    def to_serialized(self) -> str:
+        return serialize_query_handle(self._request_id, self._handle)
 
     def _get_handle_status_response(self, resp: HttpResponse) -> QueryHandleStatusResponse:
         if resp.json_response is None:

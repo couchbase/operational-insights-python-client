@@ -19,6 +19,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Union
 
+from couchbase_operational_insights.common._core.query_handle import get_query_handle_fields
 from couchbase_operational_insights.common.result import BlockingQueryResult
 from couchbase_operational_insights.protocol._core.client_adapter import _ClientAdapter
 from couchbase_operational_insights.protocol._core.request import _RequestBuilder
@@ -93,6 +94,12 @@ class Scope:
         request_context = RequestContext(self.client_adapter, base_req)
         resp = HttpResponse(request_context)
         resp.send_request()
+        request_id, handle = get_query_handle_fields(resp.json_response)
         return BlockingQueryHandle(
-            self.client_adapter, self._request_builder, resp, self.threadpool_executor, stream_config=stream_config
+            self.client_adapter,
+            self._request_builder,
+            request_id,
+            handle,
+            self.threadpool_executor,
+            stream_config=stream_config,
         )
