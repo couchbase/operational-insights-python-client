@@ -420,7 +420,11 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
         self._json_stream: AsyncJsonStream
         self._stage_completed: Optional[anyio.Event] = None
         self._stage_error: Optional[Exception] = None
+        self._stage_scope: Optional[anyio.CancelScope] = None
         self._deserializer = request.deserializer
+        self._time_to_first_byte_ended = False
+        # _limit_timeouts_to_deadline() caps the read timeout, keep the configured value for the idle timeout
+        self._idle_timeout = (request.get_request_timeouts() or {}).get('read', None)
 
     @property
     def has_stage_completed(self) -> bool:
@@ -452,6 +456,26 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
         if not self._deserializer:
             raise RuntimeError('No deserializer found for this request context.')
         return self._deserializer.deserialize(result)
+
+    def end_time_to_first_byte_deadline(self) -> None:
+        """
+        **INTERNAL**
+
+        A fetch results timeout only bounds the time to the first byte. Once the response starts, the HTTP client's read
+        timeout is restored to the configured value and remains as the idle timeout. The deadline is kept, so a retry
+        enforces it again.
+        """
+        if not isinstance(self._request, FetchResultsRequest):
+            return
+        self.log_message(
+            'Response started, ending the time to first byte deadline',
+            LogLevel.DEBUG,
+            message_data={'request_deadline': f'{self._request_deadline}'},
+        )
+        self._time_to_first_byte_ended = True
+        # the HTTP client reads the read timeout again when the body read starts, so this applies to the stream
+        timeouts = cast(Dict[str, Optional[float]], self._request.get_request_timeouts() or {})
+        timeouts['read'] = self._idle_timeout
 
     def raise_if_stage_failed(self) -> None:
         if self._stage_error is not None:
@@ -530,23 +554,44 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
             # we move to iterating rows
             self._request_state = RequestState.StreamingResults
 
-    async def _execute(self, fn: Callable[..., Awaitable[Any]], *args: object) -> None:
-        try:
-            await fn(*args)
-        except anyio.get_cancelled_exc_class():
-            # cancel_request() cancels the task group. Close the stream so an iterator waiting on a row in another
-            # task wakes up instead of hanging
-            with anyio.CancelScope(shield=True):
-                await self._json_stream.close_on_stream_error()
-            raise
-        except Exception as ex:
-            # raising here would cancel the task group, and with it the caller's iteration
-            self.log_message(f'Error reading the response stream: {ex!r}', LogLevel.DEBUG)
-            self._stage_error = ex
-            await self._json_stream.close_on_stream_error()
-        finally:
-            if self._stage_completed is not None:
-                self._stage_completed.set()
+    def _check_timed_out(self) -> None:
+        # set by end_time_to_first_byte_deadline() once a fetch results response starts. Past that point the
+        # request deadline no longer applies, and stalls are caught by the HTTP client's read (idle) timeout
+        if self._time_to_first_byte_ended:
+            return
+        super()._check_timed_out()
+
+    async def _execute(
+        self,
+        json_stream: AsyncJsonStream,
+        stage_completed: anyio.Event,
+        stage_scope: anyio.CancelScope,
+        fn: Callable[..., Awaitable[Any]],
+        *args: object,
+    ) -> None:
+        """
+        **INTERNAL**
+
+        A stage only uses the stream and event it started with, as a retry replaces them while an earlier attempt's
+        stage can still be running.
+        """
+        with stage_scope:
+            try:
+                await fn(*args)
+            except anyio.get_cancelled_exc_class():
+                # cancel_request() cancels the task group. Close the stream so an iterator waiting on a row in another
+                # task wakes up instead of hanging
+                with anyio.CancelScope(shield=True):
+                    await json_stream.close_on_stream_error()
+                raise
+            except Exception as ex:
+                # raising here would cancel the task group, and with it the caller's iteration
+                self.log_message(f'Error reading the response stream: {ex!r}', LogLevel.DEBUG)
+                if not stage_scope.cancel_called:
+                    self._stage_error = ex
+                await json_stream.close_on_stream_error()
+            finally:
+                stage_completed.set()
 
     async def shutdown(
         self,
@@ -559,12 +604,17 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
             self._json_stream.close_parser()
 
     def _reset_stream(self) -> None:
+        # the previous attempt's stage can still be reading the response, stop it before the retry starts a new one
+        if self._stage_scope is not None:
+            self._stage_scope.cancel()
+            self._stage_scope = None
         if hasattr(self, '_json_stream'):
             self._json_stream.close_parser()
             del self._json_stream
         self._request_state = RequestState.ResetAndNotStarted
         self._stage_completed = None
         self._stage_error = None
+        self._time_to_first_byte_ended = False
         self._cancel_scope_deadline_updated = False
 
     def _start_next_stage(
@@ -577,7 +627,10 @@ class AsyncStreamingRequestContext(AsyncRequestContext):
                 raise RuntimeError('Task already running in this context.')
 
         self._stage_completed = anyio.Event()
-        self._taskgroup.start_soon(self._execute, fn, *args)
+        self._stage_scope = anyio.CancelScope()
+        self._taskgroup.start_soon(
+            self._execute, self._json_stream, self._stage_completed, self._stage_scope, fn, *args
+        )
 
     async def _trace_handler(self, event_name: str, _: str) -> None:
         if event_name == 'connection.connect_tcp.complete':

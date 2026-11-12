@@ -53,7 +53,8 @@ def send_request_override(
     if not hasattr(self, '_client'):
         raise RuntimeError('Client not created yet')
 
-    request_json = request.body
+    # handle requests (e.g. fetch results) have no body, the test server reads its instructions from the JSON
+    request_json = request.body if request.body is not None else {}
     if hasattr(self, '_request_json') and self._request_json is not None:
         request_json.update(self._request_json)
 

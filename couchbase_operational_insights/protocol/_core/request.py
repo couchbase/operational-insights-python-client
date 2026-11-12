@@ -204,6 +204,10 @@ class _RequestBuilder:
         q_opts = self._opts_builder.build_options(FetchResultsOptions, kwargs, options)
         base_request = self.build_request_from_handle(handle)
         deserializer = q_opts.pop('deserializer', None) or self._conn_details.default_deserializer
+        # time to first byte, then stays as the HTTP client's idle timeout
+        timeout = q_opts.pop('timeout', None)
+        if timeout:
+            base_request.extensions['timeout']['read'] = timeout
         max_retries = self._conn_details.get_max_retries()
         return FetchResultsRequest(
             url=base_request.url,

@@ -60,6 +60,7 @@ class AsyncWebServer:
                 web.post('/test_results', self.handle_results_request),
                 web.post('/test_slow_results', self.handle_slow_results_request),
                 web.post('/test_streamed_results', self.handle_streamed_results_request),
+                web.get('/test_fetch_results', self.handle_streamed_results_request),
             ]
         )
 
@@ -278,7 +279,7 @@ class AsyncWebServer:
         if streamed_req.header_delay > 0:
             await asyncio.sleep(streamed_req.header_delay)
         response = web.StreamResponse(
-            status=200,
+            status=streamed_req.status,
             headers={'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Cache-Control': 'no-cache'},
         )
         await response.prepare(request)

@@ -212,15 +212,18 @@ class StartQueryOptionsTransformedKwargs(TypedDict, total=False):
 
 class FetchResultsOptionsTransforms(TypedDict):
     deserializer: Dict[Literal['deserializer'], Callable[[Any], Deserializer]]
+    timeout: Dict[Literal['timeout'], Callable[[Any], float]]
 
 
 FETCH_RESULTS_OPTIONS_TRANSFORMS: FetchResultsOptionsTransforms = {
     'deserializer': {'deserializer': VALIDATE_DESERIALIZER},
+    'timeout': {'timeout': to_seconds},
 }
 
 
 class FetchResultsOptionsTransformedKwargs(TypedDict, total=False):
     deserializer: Optional[Deserializer]
+    timeout: Optional[float]
 
 
 TransformDetailsPair = Union[

@@ -236,14 +236,19 @@ class StartQueryOptionsBase(Dict[str, object]):
 
 class FetchResultsOptionsKwargs(TypedDict, total=False):
     deserializer: Optional[Deserializer]
+    timeout: Optional[timedelta]
 
 
-FetchResultsOptionsValidKeys: TypeAlias = Literal['deserializer',]
+FetchResultsOptionsValidKeys: TypeAlias = Literal[
+    'deserializer',
+    'timeout',
+]
 
 
 class FetchResultsOptionsBase(Dict[str, object]):
     VALID_OPTION_KEYS: List[FetchResultsOptionsValidKeys] = [
         'deserializer',
+        'timeout',
     ]
 
     def __init__(self, **kwargs: Unpack[FetchResultsOptionsKwargs]) -> None:

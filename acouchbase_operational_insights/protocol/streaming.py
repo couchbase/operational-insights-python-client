@@ -204,6 +204,7 @@ class AsyncHttpStreamingResponse:
         # start cancel scope
         await self._request_context.initialize()
         self._core_response = await self._request_context.send_request()
+        self._request_context.end_time_to_first_byte_deadline()
         self._request_context.start_stream(self._core_response)
         # block until we either know we have rows or we have an error
         await self._request_context.wait_for_results_or_errors()

@@ -40,7 +40,8 @@ class WebServerHandler:
 
     @property
     def connstr(self) -> str:
-        host = self._host if self._host != '0.0.0.0' else 'localhost'
+        # the server only listens on IPv4, and on Windows localhost tries ::1 first, which takes ~1s to fail
+        host = self._host if self._host != '0.0.0.0' else '127.0.0.1'
         return f'http://{host}:{self._port}'
 
     def start_server(self) -> None:
